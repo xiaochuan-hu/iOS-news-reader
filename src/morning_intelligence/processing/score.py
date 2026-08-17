@@ -29,6 +29,12 @@ def score_event(
             interest_weights.append(1.0)
     event.personal_interest_score = min(1.0, max(interest_weights, default=1.0) / 1.5)
     event.novelty_score = 0.15 if was_recently_spoken else 1.0
+    event.global_importance_score = round(
+        0.45 * event.recency_score
+        + 0.35 * event.source_score
+        + 0.20 * event.cross_source_score,
+        6,
+    )
     event.final_score = calculate_final_score(event, preferences)
     return event
 

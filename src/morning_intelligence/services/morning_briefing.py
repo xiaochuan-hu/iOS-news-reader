@@ -10,11 +10,10 @@ from morning_intelligence.config import PreferencesConfig, Settings
 from morning_intelligence.domain import Briefing, PipelineMetrics, PipelineStatus
 from morning_intelligence.llm import LLMProvider
 from morning_intelligence.processing import (
-    calculate_final_score,
+    EditorialSelector,
     cluster_items,
     deduplicate_items,
     normalize_item,
-    rank_events,
     score_event,
     title_similarity,
 )
@@ -41,6 +40,7 @@ class MorningBriefingService:
         self.collector = collector
         self.llm_provider = llm_provider
         self.generator = BriefingGenerator(llm_provider)
+        self.editorial_selector = EditorialSelector(preferences)
         self._refresh_lock = asyncio.Lock()
 
     async def refresh(self) -> Briefing:
@@ -78,42 +78,47 @@ class MorningBriefingService:
                     )
                     score_event(event, self.preferences, was_recently_spoken=repeated)
 
-                candidates = sorted(events, key=lambda event: event.final_score, reverse=True)[
-                    : self.preferences.briefing.max_events * 2
+                candidates = sorted(
+                    (
+                        event
+                        for event in events
+                        if event.final_score >= self.preferences.briefing.min_event_score
+                    ),
+                    key=lambda event: event.final_score,
+                    reverse=True,
+                )[
+                    : self.preferences.briefing.max_events * 4
                 ]
-                if self.llm_provider and candidates:
-                    call_started = time.perf_counter()
-                    metrics.llm_calls += 1
-                    try:
-                        scores = await self.llm_provider.score_events(candidates)
-                        for event in candidates:
-                            event.llm_importance_score = scores.get(event.id, 0.0)
-                            event.final_score = calculate_final_score(event, self.preferences)
-                    except Exception as exc:
-                        metrics.errors.append(f"LLM scoring: {type(exc).__name__}: {exc}"[:500])
-                    metrics.llm_latency_ms += (time.perf_counter() - call_started) * 1000
-
-                ranked = rank_events(candidates, self.preferences)
-                metrics.events_shortlisted = len(ranked)
+                metrics.candidate_events = len(candidates)
+                selection = self.editorial_selector.select(candidates)
+                selected = selection.events
+                metrics.selected_events = len(selected)
+                metrics.events_shortlisted = len(selected)
+                metrics.selected_categories = selection.selected_categories
                 self.repository.save_items(normalized)
-                self.repository.save_events(ranked)
+                self.repository.save_events(selected)
 
-                if self.llm_provider and ranked:
-                    metrics.llm_calls += 1
-                    generation_started = time.perf_counter()
-                else:
-                    generation_started = 0.0
-                briefing, llm_used = await self.generator.generate(
-                    ranked,
+                generation = await self.generator.generate(
+                    selected,
                     target_minutes=self.preferences.briefing.target_minutes,
                     language=self.preferences.language,
+                    characters_per_minute=self.preferences.briefing.characters_per_minute,
                 )
-                if generation_started:
-                    metrics.llm_latency_ms += (
-                        time.perf_counter() - generation_started
-                    ) * 1000
-                    if not llm_used:
-                        metrics.errors.append("LLM synthesis failed; deterministic script used")
+                briefing = generation.briefing
+                metrics.llm_synthesis_calls = generation.synthesis_calls
+                metrics.llm_script_calls = generation.script_calls
+                metrics.llm_calls = generation.synthesis_calls + generation.script_calls
+                metrics.llm_synthesis_latency_ms = generation.synthesis_latency_ms
+                metrics.llm_script_latency_ms = generation.script_latency_ms
+                metrics.llm_latency_ms = (
+                    generation.synthesis_latency_ms + generation.script_latency_ms
+                )
+                metrics.fallback_used = generation.fallback_used
+                metrics.fallback_reason = generation.fallback_reason
+                if generation.fallback_used and self.llm_provider is not None:
+                    metrics.errors.append(
+                        f"LLM editorial fallback: {generation.fallback_reason}"[:500]
+                    )
                 self.repository.save_briefing(briefing)
 
                 metrics.status = (
@@ -135,15 +140,23 @@ class MorningBriefingService:
                 self.repository.save_pipeline_run(metrics)
                 logger.info(
                     "pipeline_run run_id=%s status=%s sources=%d/%d items=%d events=%d "
-                    "shortlisted=%d llm_calls=%d total_latency_ms=%.1f",
+                    "candidates=%d selected=%d categories=%s llm_synthesis_calls=%d "
+                    "llm_script_calls=%d fallback=%s total_latency_ms=%.1f",
                     metrics.run_id,
                     metrics.status,
                     metrics.sources_succeeded,
                     metrics.sources_requested,
                     metrics.items_fetched,
                     metrics.events_clustered,
-                    metrics.events_shortlisted,
-                    metrics.llm_calls,
+                    metrics.candidate_events,
+                    metrics.selected_events,
+                    ",".join(
+                        f"{category}:{count}"
+                        for category, count in sorted(metrics.selected_categories.items())
+                    ),
+                    metrics.llm_synthesis_calls,
+                    metrics.llm_script_calls,
+                    metrics.fallback_reason or "none",
                     metrics.total_latency_ms,
                 )
 
@@ -168,11 +181,13 @@ class MorningBriefingService:
         if not events:
             return await self._deadline_refresh()
 
-        briefing, _ = await self.generator.generate(
+        generation = await self.generator.generate(
             events,
             target_minutes=target_minutes or self.preferences.briefing.target_minutes,
             language=self.preferences.language,
+            characters_per_minute=self.preferences.briefing.characters_per_minute,
         )
+        briefing = generation.briefing
         self.repository.save_briefing(briefing)
         return briefing
 

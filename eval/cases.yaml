@@ -47,3 +47,70 @@
   type: latency
   item_count: 100
   threshold_ms: 500
+
+- id: english_source_to_chinese_intelligence
+  type: structured_chinese
+  expected_ids: [english-event]
+  min_chinese: 12
+  rows:
+    - event_id: english-event
+      summary_zh: "美国多个州正在就青少年产品机制起诉 Meta。"
+      why_it_matters: "这可能影响平台产品设计边界。"
+      confidence: 0.9
+
+- id: ai_candidate_balance
+  type: editorial
+  max_events: 6
+  minimum_score: 0.40
+  max_category_counts: {ai_llm_agent: 4}
+  required_category_counts: {world: 2}
+  candidates:
+    - {category: ai_llm_agent, global: 0.78, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.77, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.76, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.75, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.74, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.73, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.72, personal: 1.0}
+    - {category: ai_llm_agent, global: 0.71, personal: 1.0}
+    - {category: world, global: 0.70, personal: 0.67}
+    - {category: world, global: 0.68, personal: 0.67}
+
+- id: no_trivial_uk_quota_filler
+  type: editorial
+  max_events: 8
+  minimum_score: 0.50
+  forbidden_categories: [uk]
+  required_category_counts: {world: 1}
+  candidates:
+    - {category: world, global: 0.85, personal: 0.67}
+    - {category: uk, global: 0.20, personal: 0.80}
+
+- id: malformed_llm_json
+  type: malformed_json
+  text: "```json {not valid json} ```"
+  expected_error: true
+
+- id: llm_timeout_uses_fallback
+  type: timeout_fallback
+
+- id: unsupported_fact_grounding_rules
+  type: grounding_prompt
+  phrases:
+    - "不得发明统计数字"
+    - "不得补充外部知识"
+    - "与已发生事实明确区分"
+
+- id: target_minutes_affects_length
+  type: length_control
+  event_count: 4
+  short_minutes: 1
+  long_minutes: 5
+
+- id: partial_structured_result
+  type: structured_chinese
+  expected_ids: [known]
+  min_chinese: 4
+  rows:
+    - {event_id: known, summary_zh: "已知事件的中文综合。"}
+    - {event_id: unknown, summary_zh: "未知事件必须被拒绝。"}

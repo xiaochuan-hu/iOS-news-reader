@@ -36,8 +36,48 @@ class WeightedPreference(BaseModel):
 
 class BriefingConfig(BaseModel):
     target_minutes: int = Field(default=5, ge=1, le=10)
-    max_events: int = Field(default=10, ge=1, le=30)
+    min_events: int = Field(default=5, ge=1, le=30)
+    max_events: int = Field(default=8, ge=1, le=30)
     min_event_score: float = Field(default=0.2, ge=0, le=1)
+    characters_per_minute: int = Field(default=260, ge=180, le=360)
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_legacy_max_events_override(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "max_events" in value and "min_events" not in value:
+            value = dict(value)
+            value["min_events"] = min(5, int(value["max_events"]))
+        return value
+
+    @model_validator(mode="after")
+    def event_range_is_valid(self) -> BriefingConfig:
+        if self.min_events > self.max_events:
+            raise ValueError("briefing min_events cannot exceed max_events")
+        return self
+
+
+class EditorialConfig(BaseModel):
+    minimum_score: float = Field(default=0.44, ge=0, le=1)
+    global_weight: float = Field(default=0.75, ge=0, le=1)
+    personal_weight: float = Field(default=0.25, ge=0, le=1)
+    diversity_bonus: float = Field(default=0.08, ge=0, le=0.5)
+    category_overflow_penalty: float = Field(default=0.22, ge=0, le=0.5)
+    category_targets: dict[str, int] = Field(
+        default_factory=lambda: {
+            "world": 2,
+            "ai_llm_agent": 3,
+            "technology": 2,
+            "finance": 1,
+            "uk": 1,
+            "china": 1,
+        }
+    )
+
+    @model_validator(mode="after")
+    def editorial_weights_sum_to_one(self) -> EditorialConfig:
+        if abs(self.global_weight + self.personal_weight - 1.0) > 0.0001:
+            raise ValueError("editorial global_weight and personal_weight must sum to 1.0")
+        return self
 
 
 class RankingWeights(BaseModel):
@@ -66,6 +106,7 @@ class PreferencesConfig(BaseModel):
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     interests: dict[str, WeightedPreference] = Field(default_factory=dict)
     avoid: dict[str, WeightedPreference] = Field(default_factory=dict)
+    editorial: EditorialConfig = Field(default_factory=EditorialConfig)
     ranking: RankingWeights = Field(default_factory=RankingWeights)
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
 

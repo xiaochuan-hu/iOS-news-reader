@@ -21,3 +21,9 @@ def test_infers_avoid_category_before_general_world(make_item) -> None:
 
 def test_preserves_configured_category_when_no_keyword_matches() -> None:
     assert infer_category(["A diplomatic meeting took place"], "world") == "world"
+
+
+def test_infers_low_value_viral_variants() -> None:
+    assert infer_category(["Movie that went viral and won ironic fans"], "world") == (
+        "low_value_viral"
+    )

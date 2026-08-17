@@ -49,6 +49,15 @@ def test_briefing_requires_auth() -> None:
     assert "MORNING_API_TOKEN" not in response.text
 
 
+def test_briefing_rejects_wrong_bearer_token() -> None:
+    client, _ = make_client()
+    response = client.get(
+        "/v1/briefings/latest/text",
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert response.status_code == 401
+
+
 def test_latest_json_and_plain_text_contracts() -> None:
     client, _ = make_client()
     headers = {"Authorization": "Bearer test-token"}

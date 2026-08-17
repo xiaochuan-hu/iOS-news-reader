@@ -19,7 +19,7 @@ GET /v1/briefings/latest
 Authorization: Bearer TOKEN
 ```
 
-Returns `id`, `generated_at`, `freshness_minutes`, `event_count`, `estimated_duration_seconds`, `spoken_text`, structured `sections`, `sources` and `is_fallback`. If the database has no briefing yet, the first request attempts one deadline-bounded refresh.
+Returns `id`, `generated_at`, `freshness_minutes`, `event_count`, `estimated_duration_seconds`, `spoken_text`, structured `sections`, `sources` and `is_fallback`. `sections[].text` contains the Chinese event synthesis when the LLM path succeeded. If the database has no briefing yet, the first request attempts one deadline-bounded refresh.
 
 ## Shortcut text endpoint
 
@@ -48,7 +48,9 @@ Content-Type: application/json
 }
 ```
 
-When ranked events are newer than `max_age_minutes`, the service skips source collection and only synthesizes from cache. Otherwise it attempts a bounded refresh. A refresh/synthesis failure returns the most recent briefing with `is_fallback=true` when one exists; with no cache it returns `503`.
+When selected events are newer than `max_age_minutes`, the service skips source collection and synthesizes from cache. Otherwise it attempts a bounded refresh. `target_minutes` changes the spoken character budget and duration estimate. LLM-only failure produces a deterministic briefing without changing the response contract; a complete refresh failure returns the most recent briefing with `is_fallback=true` when one exists. With no cache it returns `503`.
+
+Normal LLM generation uses two provider calls: one batch structured synthesis and one spoken composition. Unknown event IDs, malformed rows and missing optional fields are handled before the spoken call. No per-article calls are made.
 
 ## Errors
 

@@ -45,9 +45,32 @@ class NewsEvent(BaseModel):
     personal_interest_score: float = Field(default=0, ge=0, le=1)
     novelty_score: float = Field(default=1, ge=0, le=1)
     llm_importance_score: float = Field(default=0, ge=0, le=1)
+    global_importance_score: float = Field(default=0, ge=0, le=1)
+    editorial_score: float = Field(default=0, ge=0, le=1)
     final_score: float = Field(default=0, ge=0, le=1)
     summary: str = ""
     why_it_matters: str = ""
+
+
+class EventIntelligence(BaseModel):
+    event_id: str
+    summary_zh: str = Field(default="", max_length=800)
+    why_it_matters: str = Field(default="", max_length=600)
+    watch_next: str = Field(default="", max_length=400)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    key_facts: list[str] = Field(default_factory=list)
+    source_consensus: str = Field(default="", max_length=300)
+
+
+class EnrichedNewsEvent(BaseModel):
+    event: NewsEvent
+    intelligence: EventIntelligence
+
+
+class EditorialSelection(BaseModel):
+    candidate_count: int
+    events: list[NewsEvent]
+    selected_categories: dict[str, int] = Field(default_factory=dict)
 
 
 class BriefingSection(BaseModel):
@@ -80,9 +103,18 @@ class PipelineMetrics(BaseModel):
     items_after_dedup: int = 0
     events_clustered: int = 0
     events_shortlisted: int = 0
+    candidate_events: int = 0
+    selected_events: int = 0
+    selected_categories: dict[str, int] = Field(default_factory=dict)
     llm_calls: int = 0
     llm_latency_ms: float = 0
+    llm_synthesis_calls: int = 0
+    llm_script_calls: int = 0
+    llm_synthesis_latency_ms: float = 0
+    llm_script_latency_ms: float = 0
     total_latency_ms: float = 0
     briefing_char_count: int = 0
     estimated_duration_seconds: int = 0
+    fallback_used: bool = False
+    fallback_reason: str = ""
     errors: list[str] = Field(default_factory=list)

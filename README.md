@@ -10,15 +10,17 @@ The important latency decision is simple: the alarm does not start a full intern
 - Per-source timeout and partial-failure isolation.
 - Canonical URL and normalized-title deduplication.
 - Cross-source fuzzy title clustering into `NewsEvent`.
-- Configurable hybrid recency, quality, confirmation, interest, novelty and optional LLM scoring.
-- OpenAI-compatible batch scoring and spoken-script provider.
+- Configurable deterministic ranking plus a diversity-aware editorial selection layer.
+- Separate global importance and personal relevance, with soft category targets and no filler quota.
+- OpenAI-compatible batch event synthesis followed by one Chinese spoken-script call.
+- Validated Chinese event intelligence: summary, why it matters, watch next, key facts and confidence.
 - Deterministic Chinese fallback when no API key is set or the LLM fails.
 - SQLite persistence for items, events, briefings and pipeline runs.
 - Startup/periodic prefetch, cached wake path and bounded incremental refresh.
 - FastAPI JSON/text contracts, bearer/query-token auth and Docker deployment.
-- Unit, integration, failure and eight-case offline evaluation suite.
+- Unit, integration, failure and sixteen-case offline evaluation suite.
 
-Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md), [docs/reference-audit.md](docs/reference-audit.md), and [docs/decisions/001-build-vs-reuse.md](docs/decisions/001-build-vs-reuse.md).
+Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md), [docs/reference-audit.md](docs/reference-audit.md), [docs/decisions/001-build-vs-reuse.md](docs/decisions/001-build-vs-reuse.md), and [docs/decisions/002-editorial-llm-pipeline.md](docs/decisions/002-editorial-llm-pipeline.md).
 
 ## Local development
 
@@ -53,7 +55,7 @@ curl -X POST \
 
 The very first briefing requires a source fetch. Later GET requests are the low-latency cached path. For the best wake-up experience, keep the service running so the background refresher has populated the cache.
 
-On the 2026-08-17 development smoke run with the committed four public source adapters, a cold no-LLM request completed in 2.24 seconds and the next cached GET in 1.6 milliseconds. These are observations, not service-level guarantees; network, host and feed performance vary.
+On the 2026-08-17 V2 development smoke run with the committed four public source adapters, a cold no-LLM request completed in 1.68 seconds, selected six events from 32 candidates, and the next cached GET completed in 1.5 milliseconds. These are observations, not service-level guarantees; network, host and feed performance vary.
 
 ## Docker
 
@@ -81,13 +83,15 @@ With the server running:
 MORNING_API_TOKEN=your-token ./scripts/smoke_test.sh
 ```
 
-The evaluation fixtures cover cross-source deduplication, distinct-event retention, tracking URLs, partial source failure, LLM fallback, no-news behavior, novelty and local processing latency.
+The evaluation fixtures cover the V1 regressions plus English-to-Chinese synthesis, AI-topic balance, soft targets, malformed JSON, LLM timeout fallback, grounding rules, partial structured output and target-length response.
 
 ## Configuration
 
 Environment variables control secrets, file paths and operational timeouts. YAML controls sources and preferences. Ranking weights must sum to `1.0`; invalid configuration fails at startup rather than silently changing editorial behavior.
 
-If `LLM_API_KEY` is provided, `LLM_BASE_URL` must expose the OpenAI-compatible `/chat/completions` endpoint. Event importance is scored in one batch and the final script is one additional call—never one call per article.
+If `LLM_API_KEY` is provided, `LLM_BASE_URL` must expose the OpenAI-compatible `/chat/completions` endpoint. One request synthesizes all selected events into validated Chinese intelligence and one request writes the spoken briefing. Normal generation therefore uses at most two calls, never one call per article. With no key or any provider failure, the deterministic briefing remains available.
+
+`briefing.target_minutes` and `briefing.characters_per_minute` define the requested character budget. `editorial.minimum_score` removes weak events before composition; `editorial.category_targets` are diversity hints rather than quotas. It is valid to return fewer than `briefing.min_events` when the remaining news is not meaningful.
 
 ## iPhone setup
 

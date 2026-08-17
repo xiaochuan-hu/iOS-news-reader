@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -51,8 +52,12 @@ def normalize_title(title: str) -> str:
 
 def normalize_item(item: NewsItem) -> NewsItem:
     normalized = item.model_copy(deep=True)
-    normalized.title = " ".join(unicodedata.normalize("NFKC", item.title).split())
-    normalized.description = re.sub(r"<[^>]+>", " ", item.description or "")
+    normalized.title = " ".join(
+        unicodedata.normalize("NFKC", html.unescape(item.title)).split()
+    )
+    normalized.description = re.sub(
+        r"<[^>]+>", " ", html.unescape(item.description or "")
+    )
     normalized.description = " ".join(normalized.description.split())
     normalized.canonical_url = canonicalize_url(item.url)
     normalized.category = infer_category(

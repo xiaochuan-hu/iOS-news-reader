@@ -1,46 +1,95 @@
 from __future__ import annotations
 
+import html
 import re
 from datetime import datetime
 
-from morning_intelligence.domain import NewsEvent
+from morning_intelligence.domain import EventIntelligence, NewsEvent
+
+CATEGORY_TRANSITIONS = {
+    "ai_llm_agent": "AI 和科技方面，",
+    "technology": "科技方面，",
+    "world": "再看国际新闻，",
+    "uk": "英国方面，",
+    "china": "中国方面，",
+    "finance": "商业和市场方面，",
+}
 
 
-def deterministic_spoken_script(events: list[NewsEvent], *, now: datetime) -> str:
+def deterministic_spoken_script(
+    events: list[NewsEvent],
+    *,
+    now: datetime,
+    target_minutes: int = 5,
+    characters_per_minute: int = 260,
+) -> str:
     date_text = f"{now.month}月{now.day}日"
     if not events:
         return f"早上好。今天是{date_text}。目前没有足够重要、并且经过验证的新消息。祝你今天顺利。"
 
-    parts = [f"早上好。今天是{date_text}。今天最值得关注的事情有{len(events)}件。"]
-    for index, event in enumerate(events, start=1):
-        description = _best_description(event)
-        transition = "首先" if index == 1 else f"第{_chinese_number(index)}件事"
-        sentence = f"{transition}，{event.canonical_title}。"
-        if description and description.casefold() not in event.canonical_title.casefold():
-            sentence += f"{description}。"
-        if event.source_count >= 2:
-            sentence += f"这件事得到{_chinese_number(event.source_count)}个来源的交叉确认。"
-        if event.why_it_matters:
-            sentence += f"它的影响是，{event.why_it_matters.rstrip('。')}。"
+    target_chars = target_minutes * characters_per_minute
+    detail_budget = max(90, target_chars // max(1, len(events)))
+    parts = [f"早上好。今天是{date_text}。今天有{len(events)}件事情值得关注。"]
+    previous_category = ""
+    for index, event in enumerate(events):
+        intelligence = deterministic_event_intelligence(event)
+        category = event.categories[0] if event.categories else "world"
+        if index == 0:
+            transition = "今天首先值得关注的是，"
+        elif category != previous_category:
+            transition = CATEGORY_TRANSITIONS.get(category, "另外，")
+        else:
+            transition = "同一主题下，"
+        sentence = f"{transition}{intelligence.summary_zh.rstrip('。')}。"
+        if detail_budget >= 150 and intelligence.why_it_matters:
+            sentence += f"这件事值得关注，因为{intelligence.why_it_matters.rstrip('。')}。"
+        if detail_budget >= 210 and event.source_count >= 2:
+            sentence += "目前有多个独立来源报道了这一进展。"
+        if detail_budget >= 250 and intelligence.watch_next:
+            sentence += f"接下来值得观察的是，{intelligence.watch_next.rstrip('。')}。"
         parts.append(sentence)
-    parts.append("以上是今天的晨间新闻。接下来值得继续观察这些事件是否出现新的可靠进展。")
-    return sanitize_spoken_text("".join(parts))
+        previous_category = category
+    parts.append("最后，今天值得继续观察的是这些事件是否出现新的可靠进展。祝你今天顺利。")
+    return sanitize_spoken_text("".join(parts), max_chars=round(target_chars * 1.2))
 
 
-def sanitize_spoken_text(text: str) -> str:
+def deterministic_event_intelligence(event: NewsEvent) -> EventIntelligence:
+    description = _best_description(event)
+    summary = description or event.canonical_title
+    return EventIntelligence(
+        event_id=event.id,
+        summary_zh=summary,
+        why_it_matters=event.why_it_matters,
+        watch_next="",
+        key_facts=[summary] if summary else [],
+        confidence=None,
+        source_consensus=(
+            f"{event.source_count}个来源报道" if event.source_count >= 2 else "单一来源"
+        ),
+    )
+
+
+def sanitize_spoken_text(text: str, *, max_chars: int = 1800) -> str:
+    text = html.unescape(text)
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
-    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"https?://[^\s。！？；，,]+", " ", text)
     text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"[*_`]+", "", text)
     text = re.sub(r"\[(\d+)\]", "", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:1800].rstrip("，,；; ")
+    if len(text) <= max_chars:
+        return text.rstrip("，,；; ")
+    clipped = text[:max_chars]
+    sentence_end = max(clipped.rfind(symbol) for symbol in "。！？")
+    if sentence_end >= round(max_chars * 0.75):
+        clipped = clipped[: sentence_end + 1]
+    return clipped.rstrip("，,；; ")
 
 
-def estimate_duration_seconds(text: str) -> int:
+def estimate_duration_seconds(text: str, *, characters_per_minute: int = 260) -> int:
     speakable = re.sub(r"\s+", "", text)
-    return max(1, round(len(speakable) / 4.0))
+    return max(1, round(len(speakable) / characters_per_minute * 60))
 
 
 def _best_description(event: NewsEvent) -> str:
@@ -48,15 +97,6 @@ def _best_description(event: NewsEvent) -> str:
         return event.summary.strip().rstrip("。")
     description = max((item.description for item in event.items), key=len, default="")
     cleaned = re.sub(r"\s+", " ", description).strip()
-    return cleaned[:180].rstrip("。.!！")
-
-
-def _chinese_number(value: int) -> str:
-    digits = "零一二三四五六七八九"
-    if value < 10:
-        return digits[value]
-    if value == 10:
-        return "十"
-    if value < 20:
-        return "十" + digits[value - 10]
-    return str(value)
+    if cleaned.casefold().startswith(("http://", "https://")):
+        return ""
+    return cleaned[:260].rstrip("。.!！")

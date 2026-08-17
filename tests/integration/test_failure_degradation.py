@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import httpx
 
 from morning_intelligence.config import PreferencesConfig, Settings
-from morning_intelligence.domain import NewsEvent, NewsItem, SourceType
+from morning_intelligence.domain import (
+    EnrichedNewsEvent,
+    EventIntelligence,
+    NewsEvent,
+    NewsItem,
+    SourceType,
+)
 from morning_intelligence.llm import LLMProvider
 from morning_intelligence.services import CollectorService, MorningBriefingService
 from morning_intelligence.storage import SQLiteRepository
@@ -40,11 +48,18 @@ class FailingLLM(LLMProvider):
     async def score_events(self, events: list[NewsEvent]) -> dict[str, float]:
         raise TimeoutError("LLM timed out")
 
-    async def summarize_events(self, events: list[NewsEvent]) -> dict[str, tuple[str, str]]:
+    async def synthesize_events(
+        self, events: list[NewsEvent]
+    ) -> dict[str, EventIntelligence]:
         raise TimeoutError("LLM timed out")
 
     async def create_spoken_script(
-        self, events: list[NewsEvent], *, target_minutes: int, language: str
+        self,
+        events: list[EnrichedNewsEvent],
+        *,
+        target_minutes: int,
+        language: str,
+        characters_per_minute: int,
     ) -> str:
         raise TimeoutError("LLM timed out")
 
@@ -69,6 +84,15 @@ async def test_partial_source_and_llm_failure_still_returns_briefing(tmp_path) -
     assert briefing.event_count == 1
     assert briefing.spoken_text.startswith("早上好")
     assert repository.get_latest_briefing() is not None
+    with sqlite3.connect(settings.morning_database_path) as connection:
+        payload = json.loads(
+            connection.execute("SELECT payload FROM pipeline_runs").fetchone()[0]
+        )
+    assert payload["candidate_events"] == 1
+    assert payload["selected_events"] == 1
+    assert payload["llm_synthesis_calls"] == 1
+    assert payload["llm_script_calls"] == 0
+    assert payload["fallback_reason"] == "event_synthesis:TimeoutError"
 
 
 async def test_total_refresh_failure_returns_cached_briefing(tmp_path) -> None:
@@ -79,7 +103,7 @@ async def test_total_refresh_failure_returns_cached_briefing(tmp_path) -> None:
     )
     repository = SQLiteRepository(settings.morning_database_path)
     repository.initialize()
-    cached = (await _cached_briefing())[0]
+    cached = await _cached_briefing()
     repository.save_briefing(cached)
     service = MorningBriefingService(
         settings=settings,
@@ -96,4 +120,5 @@ async def test_total_refresh_failure_returns_cached_briefing(tmp_path) -> None:
 async def _cached_briefing():
     from morning_intelligence.briefing import BriefingGenerator
 
-    return await BriefingGenerator().generate([], target_minutes=5, language="zh-CN")
+    result = await BriefingGenerator().generate([], target_minutes=5, language="zh-CN")
+    return result.briefing

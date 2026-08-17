@@ -1,8 +1,23 @@
 language: zh-CN
 briefing:
   target_minutes: 5
-  max_events: 10
+  min_events: 5
+  max_events: 8
   min_event_score: 0.20
+  characters_per_minute: 260
+editorial:
+  minimum_score: 0.44
+  global_weight: 0.75
+  personal_weight: 0.25
+  diversity_bonus: 0.08
+  category_overflow_penalty: 0.22
+  category_targets:
+    world: 2
+    ai_llm_agent: 3
+    technology: 2
+    finance: 1
+    uk: 1
+    china: 1
 interests:
   ai_llm_agent: {weight: 1.5}
   technology: {weight: 1.3}

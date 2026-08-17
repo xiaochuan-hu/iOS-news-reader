@@ -17,7 +17,15 @@ KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "low_value_viral",
-        ("goes viral", "viral video", "internet reacts", "网红", "热搜"),
+        (
+            "goes viral",
+            "went viral",
+            "viral video",
+            "internet reacts",
+            "ironic fans",
+            "网红",
+            "热搜",
+        ),
     ),
     (
         "ai_llm_agent",
