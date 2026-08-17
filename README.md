@@ -16,7 +16,7 @@ The important latency decision is simple: the alarm does not start a full intern
 - Validated Chinese event intelligence: summary, why it matters, watch next, key facts and confidence.
 - Deterministic Chinese fallback when no API key is set or the LLM fails.
 - SQLite persistence for items, events, briefings and pipeline runs.
-- Startup/periodic prefetch, cached wake path and bounded incremental refresh.
+- Cold-start/daily scheduled prefetch, cached wake path and bounded incremental refresh.
 - FastAPI JSON/text contracts, bearer/query-token auth and Docker deployment.
 - Unit, integration, failure and sixteen-case offline evaluation suite.
 
@@ -53,7 +53,9 @@ curl -X POST \
   http://localhost:8000/v1/briefings/generate
 ```
 
-The very first briefing requires a source fetch. Later GET requests are the low-latency cached path. For the best wake-up experience, keep the service running so the background refresher has populated the cache.
+The very first briefing requires a source fetch. Later GET requests are the low-latency cached
+path. The background scheduler refreshes once per configured local day and follows IANA timezone
+DST rules; a restart with an existing cached briefing does not trigger another LLM call.
 
 On the 2026-08-17 V2 development smoke run with the committed four public source adapters, a cold no-LLM request completed in 1.68 seconds, selected six events from 32 candidates, and the next cached GET completed in 1.5 milliseconds. These are observations, not service-level guarantees; network, host and feed performance vary.
 
@@ -67,6 +69,8 @@ docker compose logs -f morning-intelligence
 ```
 
 SQLite lives in `./data` and configuration is mounted read-only from `./config`.
+For production deployment, persistent storage, variables, healthchecks, and the iPhone URL switch
+are documented in [docs/deployment-railway.md](docs/deployment-railway.md).
 
 ## Quality gates
 
@@ -91,6 +95,11 @@ Environment variables control secrets, file paths and operational timeouts. YAML
 
 If `LLM_API_KEY` is provided, `LLM_BASE_URL` must expose the OpenAI-compatible `/chat/completions` endpoint. One request synthesizes all selected events into validated Chinese intelligence and one request writes the spoken briefing. Normal generation therefore uses at most two calls, never one call per article. With no key or any provider failure, the deterministic briefing remains available.
 
+`MORNING_REFRESH_TIMEZONE` accepts any IANA timezone, such as `Europe/London` or
+`Asia/Singapore`; change the environment variable without changing code. The local refresh time
+uses strict `HH:MM`. `LLM_THINKING_MODE` is optional and provider-neutral: when unset, no
+`thinking` field is sent.
+
 `briefing.target_minutes` and `briefing.characters_per_minute` define the requested character budget. `editorial.minimum_score` removes weak events before composition; `editorial.category_targets` are diversity hints rather than quotas. It is valid to return fewer than `briefing.min_events` when the remaining news is not meaningful.
 
 ## iPhone setup
@@ -103,7 +112,7 @@ Alarm Is Stopped -> Run Morning Brief -> HTTP GET -> Speak Text
 
 ## Operational notes
 
-- Run one Uvicorn worker. The scheduler is in-process; multiple workers would each refresh.
+- Run one Uvicorn worker. The daily scheduler is in-process; multiple workers would each refresh.
 - Put a TLS reverse proxy in front of the service before exposing it publicly.
 - Bearer headers are safer than query tokens.
 - Docker disables Uvicorn access logs so a query-token fallback is not written to its default request log. Apply equivalent redaction at any reverse proxy.

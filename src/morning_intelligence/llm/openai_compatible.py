@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import ValidationError
@@ -21,12 +21,14 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str,
         model: str,
         timeout_seconds: float,
+        thinking_mode: Literal["enabled", "disabled"] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.thinking_mode = thinking_mode
         self.transport = transport
 
     async def score_events(self, events: list[NewsEvent]) -> dict[str, float]:
@@ -110,6 +112,8 @@ class OpenAICompatibleProvider(LLMProvider):
         }
         if response_format:
             request["response_format"] = response_format
+        if self.thinking_mode is not None:
+            request["thinking"] = {"type": self.thinking_mode}
         async with httpx.AsyncClient(
             timeout=self.timeout_seconds,
             transport=self.transport,

@@ -134,6 +134,42 @@ async def test_malformed_json_raises_provider_error(make_item) -> None:
         await _provider(handler).synthesize_events([event])
 
 
+@pytest.mark.parametrize("thinking_mode", [None, "disabled", "enabled"])
+async def test_optional_thinking_payload(thinking_mode: str | None, make_item) -> None:
+    item = make_item("Major event", "https://example.com/event")
+    event = NewsEvent(
+        id="event-1",
+        canonical_title=item.title,
+        items=[item],
+        first_seen_at=item.published_at,
+        latest_seen_at=item.published_at,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if thinking_mode is None:
+            assert "thinking" not in body
+        else:
+            assert body["thinking"] == {"type": thinking_mode}
+        assert body["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"events":[]}'}}]},
+            request=request,
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="secret",
+        base_url="https://llm.example/v1",
+        model="test",
+        timeout_seconds=2,
+        thinking_mode=thinking_mode,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert await provider.synthesize_events([event]) == {}
+
+
 def test_event_synthesis_prompt_separates_fact_from_interpretation() -> None:
     assert "不得发明统计数字" in EVENT_SYNTHESIS_SYSTEM_PROMPT
     assert "why_it_matters" in EVENT_SYNTHESIS_SYSTEM_PROMPT

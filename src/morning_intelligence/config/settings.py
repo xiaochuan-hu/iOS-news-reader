@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -122,14 +123,41 @@ class Settings(BaseSettings):
     morning_database_path: Path = Path("data/morning_intelligence.db")
     morning_sources_config: Path = Path("config/sources.yaml")
     morning_preferences_config: Path = Path("config/preferences.yaml")
-    morning_refresh_interval_minutes: int = Field(default=20, ge=1)
     morning_source_timeout_seconds: float = Field(default=8, gt=0)
-    morning_llm_timeout_seconds: float = Field(default=20, gt=0)
-    morning_generation_deadline_seconds: float = Field(default=25, gt=0)
+    morning_llm_timeout_seconds: float = Field(default=60, gt=0)
+    morning_generation_deadline_seconds: float = Field(default=90, gt=0)
     morning_background_refresh_enabled: bool = True
+    morning_refresh_timezone: str = "Europe/London"
+    morning_refresh_time_local: str = "06:00"
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-5-mini"
+    llm_thinking_mode: Literal["enabled", "disabled"] | None = None
+
+    @field_validator("morning_refresh_timezone")
+    @classmethod
+    def timezone_must_be_iana_name(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("must be a valid IANA timezone") from exc
+        return value
+
+    @field_validator("morning_refresh_time_local")
+    @classmethod
+    def refresh_time_must_be_hh_mm(cls, value: str) -> str:
+        parts = value.split(":")
+        if (
+            len(parts) != 2
+            or len(parts[0]) != 2
+            or len(parts[1]) != 2
+            or not all(part.isascii() and part.isdigit() for part in parts)
+        ):
+            raise ValueError("must use strict HH:MM format")
+        hour, minute = (int(part) for part in parts)
+        if hour > 23 or minute > 59:
+            raise ValueError("must be a valid local time")
+        return value
 
     def load_sources(self) -> SourcesConfig:
         return SourcesConfig.model_validate(_load_yaml(self.morning_sources_config))

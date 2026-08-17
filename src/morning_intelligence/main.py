@@ -36,6 +36,7 @@ def build_service(settings: Settings) -> MorningBriefingService:
             base_url=settings.llm_base_url,
             model=settings.llm_model,
             timeout_seconds=settings.morning_llm_timeout_seconds,
+            thinking_mode=settings.llm_thinking_mode,
         )
         if settings.llm_api_key
         else None
@@ -64,7 +65,8 @@ def create_app(
             task = asyncio.create_task(
                 refresh_loop(
                     runtime_service,
-                    runtime_settings.morning_refresh_interval_minutes,
+                    runtime_settings.morning_refresh_timezone,
+                    runtime_settings.morning_refresh_time_local,
                 ),
                 name="morning-intelligence-refresh",
             )

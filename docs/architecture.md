@@ -54,7 +54,7 @@ RSS / Hacker News adapters
 
 ## Two-stage latency design
 
-Stage A runs at startup and on a configurable interval. It fetches, processes, ranks and caches events, then pre-generates the latest briefing. Stage B is the alarm path. `GET /latest/text` performs only authentication plus one SQLite read. `POST /generate` begins with cached ranked events; an optional incremental refresh is bounded by the request deadline. If refresh or synthesis fails, the newest cached briefing is returned with `is_fallback=true`.
+Stage A runs immediately on an empty database, then at one configurable local time each day. It fetches, processes, ranks and caches events, then pre-generates the latest briefing. An existing cache suppresses refresh on a process restart. The IANA timezone-aware calculation follows DST changes. Stage B is the alarm path. `GET /latest/text` performs only authentication plus one SQLite read when cached. `POST /generate` begins with cached ranked events; an optional incremental refresh is bounded by the request deadline. If refresh or synthesis fails, the newest cached briefing is returned with `is_fallback=true`.
 
 The application is intentionally one process and one scheduler task. SQLite uses WAL and short transactions. A refresh lock prevents overlapping runs.
 
@@ -109,7 +109,7 @@ Call 2 sees only those validated intelligence objects—not the raw article list
 
 ## Configuration
 
-Secrets and deployment settings come from environment variables. Source lists and user preferences come from YAML. Example files are safe to commit; real tokens and `.env` are ignored. Settings remain deliberately small: database path, timeouts/deadline, refresh interval, feed list, HN limits, score weights, similarity threshold, source quality, interests and briefing limits.
+Secrets and deployment settings come from environment variables. Source lists and user preferences come from YAML. Example files are safe to commit; real tokens and `.env` are ignored. Settings remain deliberately small: database path, timeouts/deadline, daily refresh timezone/time, feed list, HN limits, score weights, similarity threshold, source quality, interests and briefing limits.
 
 ## Failure model
 

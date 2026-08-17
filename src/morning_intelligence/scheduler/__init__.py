@@ -1,3 +1,3 @@
-from .refresh import refresh_loop
+from .refresh import next_refresh_at, refresh_loop
 
-__all__ = ["refresh_loop"]
+__all__ = ["next_refresh_at", "refresh_loop"]
