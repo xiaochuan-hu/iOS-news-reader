@@ -1,0 +1,22 @@
+rss:
+  - name: BBC World
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    category: world
+    quality: 0.90
+    enabled: true
+  - name: BBC Technology
+    url: https://feeds.bbci.co.uk/news/technology/rss.xml
+    category: technology
+    quality: 0.90
+    enabled: true
+  - name: Ars Technica
+    url: https://feeds.arstechnica.com/arstechnica/index
+    category: technology
+    quality: 0.85
+    enabled: true
+hackernews:
+  enabled: true
+  fetch_top_stories: 30
+  min_score: 80
+  category: technology
+  quality: 0.70

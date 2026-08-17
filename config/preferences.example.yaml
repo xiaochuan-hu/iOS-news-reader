@@ -1,0 +1,39 @@
+language: zh-CN
+
+briefing:
+  target_minutes: 5
+  max_events: 10
+  min_event_score: 0.20
+
+interests:
+  ai_llm_agent:
+    weight: 1.5
+  technology:
+    weight: 1.3
+  uk:
+    weight: 1.2
+  china:
+    weight: 1.1
+  finance:
+    weight: 1.0
+  world:
+    weight: 1.0
+
+avoid:
+  celebrity_gossip:
+    weight: 0.2
+  low_value_viral:
+    weight: 0.2
+
+ranking:
+  recency: 0.25
+  source_quality: 0.20
+  cross_source_confirmation: 0.20
+  personal_interest: 0.20
+  novelty: 0.10
+  llm_importance: 0.05
+
+processing:
+  fuzzy_title_threshold: 76
+  lookback_hours: 30
+  novelty_lookback_days: 3

@@ -1,0 +1,49 @@
+- id: cross_source_cluster
+  type: cluster
+  threshold: 70
+  expected_events: 1
+  items:
+    - {source: Reuters, title: "OpenAI releases new GPT-6 model for developers", url: "https://reuters.example/gpt6"}
+    - {source: BBC, title: "OpenAI releases GPT-6 model aimed at developers", url: "https://bbc.example/openai-gpt6"}
+    - {source: The Verge, title: "New GPT-6 model released by OpenAI for developers", url: "https://verge.example/gpt-6"}
+
+- id: distinct_company_events
+  type: cluster
+  threshold: 76
+  expected_events: 2
+  items:
+    - {source: A, title: "OpenAI releases GPT-6", url: "https://a.example/release"}
+    - {source: B, title: "OpenAI opens a new office in London", url: "https://b.example/office"}
+
+- id: tracking_url_dedup
+  type: url
+  urls:
+    - "https://example.com/story?utm_source=x&fbclid=abc"
+    - "https://example.com/story"
+  expected_equal: true
+
+- id: partial_source_failure
+  type: partial_failure
+  outcomes: [success, failure, success]
+  expected_usable: true
+
+- id: llm_failure_spoken_fallback
+  type: spoken
+  titles: ["人工智能公司发布新模型"]
+  expected_nonempty: true
+  max_chars: 1800
+
+- id: no_major_news
+  type: spoken
+  titles: []
+  expected_phrase: "没有足够重要"
+  max_chars: 1800
+
+- id: old_story_novelty
+  type: novelty
+  expected_fresh_greater_than_repeat: true
+
+- id: processing_latency
+  type: latency
+  item_count: 100
+  threshold_ms: 500
