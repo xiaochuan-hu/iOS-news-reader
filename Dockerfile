@@ -21,7 +21,6 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 USER morning
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
-VOLUME ["/app/data"]
 EXPOSE 8000
 
 ENTRYPOINT ["docker-entrypoint.sh"]
