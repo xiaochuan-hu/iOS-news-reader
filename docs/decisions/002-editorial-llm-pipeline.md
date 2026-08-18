@@ -1,5 +1,8 @@
 # ADR 002: Separate editorial selection, event intelligence and spoken composition
 
+Status: superseded by ADR 003 for the production LLM composition and trigger path. The deterministic
+selection and enriched event boundary remain in use.
+
 - Status: accepted
 - Date: 2026-08-17
 

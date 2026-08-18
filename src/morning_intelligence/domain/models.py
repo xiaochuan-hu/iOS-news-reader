@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -62,6 +62,42 @@ class EventIntelligence(BaseModel):
     source_consensus: str = Field(default="", max_length=300)
 
 
+class LLMUsage(BaseModel):
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cache_hit_tokens: int = Field(default=0, ge=0)
+    cache_miss_tokens: int = Field(default=0, ge=0)
+
+
+class EditorialBriefingOutput(BaseModel):
+    events: list[EventIntelligence] = Field(default_factory=list)
+    spoken_text: str = ""
+
+
+class EditorialBriefingResult(BaseModel):
+    output: EditorialBriefingOutput
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class LLMBudgetClaim(BaseModel):
+    id: str
+    purpose: str
+    local_date: date
+    claimed_at_utc: datetime
+    completed_at_utc: datetime | None = None
+    success: bool | None = None
+    error: str = ""
+    provider: str = ""
+    model: str = ""
+
+
+class LLMBudgetClaimResult(BaseModel):
+    claimed: bool
+    reason: str
+    claim: LLMBudgetClaim | None = None
+
+
 class EnrichedNewsEvent(BaseModel):
     event: NewsEvent
     intelligence: EventIntelligence
@@ -107,11 +143,17 @@ class PipelineMetrics(BaseModel):
     selected_events: int = 0
     selected_categories: dict[str, int] = Field(default_factory=dict)
     llm_calls: int = 0
+    llm_editorial_calls: int = 0
     llm_latency_ms: float = 0
     llm_synthesis_calls: int = 0
     llm_script_calls: int = 0
     llm_synthesis_latency_ms: float = 0
     llm_script_latency_ms: float = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
     total_latency_ms: float = 0
     briefing_char_count: int = 0
     estimated_duration_seconds: int = 0

@@ -7,10 +7,16 @@ from typing import Any, Literal
 import httpx
 from pydantic import ValidationError
 
-from morning_intelligence.domain import EnrichedNewsEvent, EventIntelligence, NewsEvent
+from morning_intelligence.domain import (
+    EditorialBriefingOutput,
+    EditorialBriefingResult,
+    EventIntelligence,
+    LLMUsage,
+    NewsEvent,
+)
 
 from .base import LLMProvider
-from .prompts import EVENT_SYNTHESIS_SYSTEM_PROMPT, IMPORTANCE_SYSTEM, SPOKEN_SYSTEM
+from .prompts import COMBINED_EDITORIAL_SYSTEM_PROMPT
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -31,87 +37,52 @@ class OpenAICompatibleProvider(LLMProvider):
         self.thinking_mode = thinking_mode
         self.transport = transport
 
-    async def score_events(self, events: list[NewsEvent]) -> dict[str, float]:
-        payload = _event_payload(events)
-        data = await self._json_completion(
-            IMPORTANCE_SYSTEM,
-            "Score each event from 0 to 1. Return {\"scores\": {\"event_id\": number}}.\n"
-            + json.dumps(payload, ensure_ascii=False),
-        )
-        raw_scores = data.get("scores", {})
-        return {
-            str(event_id): min(1.0, max(0.0, float(score)))
-            for event_id, score in raw_scores.items()
-        }
-
-    async def synthesize_events(
-        self, events: list[NewsEvent]
-    ) -> dict[str, EventIntelligence]:
-        data = await self._json_completion(
-            EVENT_SYNTHESIS_SYSTEM_PROMPT,
-            "输入和输出约定如下。只返回 output_schema 对应的 JSON。\n"
-            + json.dumps(
-                {
-                    "events": _event_payload(events),
-                    "output_schema": {
-                        "events": [
-                            {
-                                "event_id": "输入中的 event id",
-                                "summary_zh": "简体中文事实综合",
-                                "why_it_matters": "与事实区分的克制影响解释",
-                                "watch_next": "有证据基础的后续观察点",
-                                "key_facts": ["最多六条事实"],
-                                "confidence": 0.0,
-                                "source_consensus": "来源一致性或分歧",
-                            }
-                        ]
-                    },
-                },
-                ensure_ascii=False,
-            ),
-        )
-        return parse_event_intelligence(data, expected_ids={event.id for event in events})
-
-    async def create_spoken_script(
+    async def generate_editorial_briefing(
         self,
-        events: list[EnrichedNewsEvent],
+        events: list[NewsEvent],
         *,
         target_minutes: int,
         language: str,
         characters_per_minute: int,
-    ) -> str:
+    ) -> EditorialBriefingResult:
         target_chars = target_minutes * characters_per_minute
         minimum_chars = round(target_chars * 0.8)
         maximum_chars = round(target_chars * 1.2)
-        user = (
-            f"语言：{language}。目标约 {target_chars} 个中文字符，建议范围 "
-            f"{minimum_chars}–{maximum_chars} 字。请自然报出开场、重点、主题转场和结尾。"
-            "以下内容已经过事实编辑；不得恢复原始文章列表，也不得补充外部事实：\n"
-            + json.dumps(_spoken_payload(events), ensure_ascii=False)
+        user = json.dumps(
+            {
+                "language": language,
+                "spoken_target": {
+                    "target_characters": target_chars,
+                    "minimum_characters": minimum_chars,
+                    "maximum_characters": maximum_chars,
+                },
+                "selected_events": _event_payload(events),
+                "output_schema": {
+                    "events": [
+                        {
+                            "event_id": "selected event_id",
+                            "summary_zh": "简体中文事实综合",
+                            "why_it_matters": "与事实区分的克制影响解释",
+                            "watch_next": "有证据基础的后续观察点",
+                            "key_facts": ["最多六条输入证据支持的事实"],
+                            "confidence": 0.0,
+                            "source_consensus": "来源共识或分歧",
+                        }
+                    ],
+                    "spoken_text": "完整的自然简体中文晨间口播纯文本",
+                },
+            },
+            ensure_ascii=False,
         )
-        return await self._text_completion(SPOKEN_SYSTEM, user)
-
-    async def _json_completion(self, system: str, user: str) -> dict[str, Any]:
-        text = await self._text_completion(system, user, response_format={"type": "json_object"})
-        return parse_json_object(text)
-
-    async def _text_completion(
-        self,
-        system: str,
-        user: str,
-        *,
-        response_format: dict[str, str] | None = None,
-    ) -> str:
         request: dict[str, Any] = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": COMBINED_EDITORIAL_SYSTEM_PROMPT},
                 {"role": "user", "content": user},
             ],
             "temperature": 0.2,
+            "response_format": {"type": "json_object"},
         }
-        if response_format:
-            request["response_format"] = response_format
         if self.thinking_mode is not None:
             request["thinking"] = {"type": self.thinking_mode}
         async with httpx.AsyncClient(
@@ -125,43 +96,82 @@ class OpenAICompatibleProvider(LLMProvider):
             )
             response.raise_for_status()
         body = response.json()
-        return str(body["choices"][0]["message"]["content"]).strip()
+        text = str(body["choices"][0]["message"]["content"]).strip()
+        output = parse_editorial_briefing(
+            parse_json_object(text), expected_ids={event.id for event in events}
+        )
+        return EditorialBriefingResult(output=output, usage=parse_llm_usage(body))
 
 
 def _event_payload(events: list[NewsEvent]) -> list[dict[str, Any]]:
     return [
         {
-            "id": event.id,
-            "title": event.canonical_title,
-            "published_at": event.latest_seen_at.isoformat(),
+            "event_id": event.id,
+            "canonical_title": event.canonical_title,
+            "first_seen_at": event.first_seen_at.isoformat(),
+            "latest_seen_at": event.latest_seen_at.isoformat(),
             "categories": event.categories,
             "source_count": event.source_count,
             "deterministic_score": event.final_score,
-            "evidence": [
-                {
-                    "source": item.source,
-                    "title": item.title,
-                    "description": item.description[:800],
-                    "published_at": item.published_at.isoformat(),
-                }
-                for item in event.items
-            ],
+            "global_importance": event.global_importance_score,
+            "editorial_score": event.editorial_score,
+            "evidence": _deduplicated_evidence(event),
         }
         for event in events
     ]
 
 
-def _spoken_payload(events: list[EnrichedNewsEvent]) -> list[dict[str, Any]]:
-    return [
-        {
-            "canonical_title": enriched.event.canonical_title,
-            "categories": enriched.event.categories,
-            "global_importance": enriched.event.global_importance_score,
-            "editorial_score": enriched.event.editorial_score,
-            **enriched.intelligence.model_dump(exclude={"event_id"}),
-        }
-        for enriched in events
-    ]
+def _deduplicated_evidence(event: NewsEvent) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    descriptions: set[str] = set()
+    for item in event.items:
+        description = re.sub(r"\s+", " ", item.description).strip()[:800]
+        normalized = description.casefold()
+        if normalized and normalized in descriptions:
+            description = ""
+        if normalized:
+            descriptions.add(normalized)
+        evidence.append(
+            {
+                "source": item.source,
+                "source_quality": item.source_quality,
+                "title": item.title,
+                "description": description,
+                "published_at": item.published_at.isoformat(),
+            }
+        )
+    return evidence
+
+
+def parse_editorial_briefing(
+    data: dict[str, Any], *, expected_ids: set[str]
+) -> EditorialBriefingOutput:
+    intelligence = parse_event_intelligence(data, expected_ids=expected_ids)
+    spoken_text = data.get("spoken_text", "")
+    return EditorialBriefingOutput(
+        events=list(intelligence.values()),
+        spoken_text=spoken_text if isinstance(spoken_text, str) else "",
+    )
+
+
+def parse_llm_usage(body: dict[str, Any]) -> LLMUsage:
+    usage = body.get("usage", {})
+    if not isinstance(usage, dict):
+        return LLMUsage()
+    return LLMUsage(
+        prompt_tokens=_nonnegative_int(usage.get("prompt_tokens")),
+        completion_tokens=_nonnegative_int(usage.get("completion_tokens")),
+        total_tokens=_nonnegative_int(usage.get("total_tokens")),
+        cache_hit_tokens=_nonnegative_int(usage.get("prompt_cache_hit_tokens")),
+        cache_miss_tokens=_nonnegative_int(usage.get("prompt_cache_miss_tokens")),
+    )
+
+
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def parse_event_intelligence(

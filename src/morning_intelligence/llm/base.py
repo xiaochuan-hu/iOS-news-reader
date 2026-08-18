@@ -2,24 +2,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from morning_intelligence.domain import EnrichedNewsEvent, EventIntelligence, NewsEvent
+from morning_intelligence.domain import EditorialBriefingResult, NewsEvent
 
 
 class LLMProvider(ABC):
     @abstractmethod
-    async def score_events(self, events: list[NewsEvent]) -> dict[str, float]: ...
-
-    @abstractmethod
-    async def synthesize_events(
-        self, events: list[NewsEvent]
-    ) -> dict[str, EventIntelligence]: ...
-
-    @abstractmethod
-    async def create_spoken_script(
+    async def generate_editorial_briefing(
         self,
-        events: list[EnrichedNewsEvent],
+        events: list[NewsEvent],
         *,
         target_minutes: int,
         language: str,
         characters_per_minute: int,
-    ) -> str: ...
+    ) -> EditorialBriefingResult: ...

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from morning_intelligence.domain import (
@@ -9,6 +9,7 @@ from morning_intelligence.domain import (
     BriefingSection,
     EnrichedNewsEvent,
     EventIntelligence,
+    LLMUsage,
     NewsEvent,
 )
 from morning_intelligence.llm import LLMProvider
@@ -24,10 +25,10 @@ from .spoken_script import (
 @dataclass(frozen=True)
 class BriefingGenerationResult:
     briefing: Briefing
-    synthesis_calls: int = 0
-    script_calls: int = 0
-    synthesis_latency_ms: float = 0.0
-    script_latency_ms: float = 0.0
+    editorial_calls: int = 0
+    editorial_latency_ms: float = 0.0
+    usage: LLMUsage = field(default_factory=LLMUsage)
+    llm_succeeded: bool = False
     fallback_used: bool = False
     fallback_reason: str = ""
 
@@ -46,47 +47,46 @@ class BriefingGenerator:
     ) -> BriefingGenerationResult:
         now = datetime.now(UTC)
         enriched = _fallback_enrichment(events)
-        synthesis_calls = 0
-        script_calls = 0
-        synthesis_latency_ms = 0.0
-        script_latency_ms = 0.0
+        editorial_calls = 0
+        editorial_latency_ms = 0.0
+        usage = LLMUsage()
+        llm_succeeded = False
         fallback_reason = ""
         spoken_text = ""
 
         if self.provider and events:
-            synthesis_calls = 1
+            editorial_calls = 1
             started = time.perf_counter()
             try:
-                intelligence = await self.provider.synthesize_events(events)
-                if not intelligence:
-                    raise ValueError("LLM synthesis returned no valid events")
+                generated = await self.provider.generate_editorial_briefing(
+                    events,
+                    target_minutes=target_minutes,
+                    language=language,
+                    characters_per_minute=characters_per_minute,
+                )
+                usage = generated.usage
+                intelligence = {
+                    row.event_id: row for row in generated.output.events
+                }
                 enriched = _merge_enrichment(events, intelligence)
+                spoken_text = sanitize_spoken_text(
+                    generated.output.spoken_text,
+                    max_chars=round(target_minutes * characters_per_minute * 1.2),
+                )
+                if not _is_valid_chinese_script(
+                    spoken_text,
+                    language,
+                    minimum_chars=round(
+                        target_minutes * characters_per_minute * 0.8
+                    ),
+                ):
+                    raise ValueError("LLM spoken script failed language or length validation")
+                llm_succeeded = True
             except Exception as exc:
-                fallback_reason = f"event_synthesis:{type(exc).__name__}"
+                spoken_text = ""
+                fallback_reason = f"combined_editorial:{type(exc).__name__}"
             finally:
-                synthesis_latency_ms = (time.perf_counter() - started) * 1000
-
-            if not fallback_reason:
-                script_calls = 1
-                started = time.perf_counter()
-                try:
-                    spoken_text = await self.provider.create_spoken_script(
-                        enriched,
-                        target_minutes=target_minutes,
-                        language=language,
-                        characters_per_minute=characters_per_minute,
-                    )
-                    spoken_text = sanitize_spoken_text(
-                        spoken_text,
-                        max_chars=round(target_minutes * characters_per_minute * 1.2),
-                    )
-                    if not _is_valid_chinese_script(spoken_text, language):
-                        raise ValueError("LLM spoken script was empty or not Chinese narrative")
-                except Exception as exc:
-                    spoken_text = ""
-                    fallback_reason = f"spoken_script:{type(exc).__name__}"
-                finally:
-                    script_latency_ms = (time.perf_counter() - started) * 1000
+                editorial_latency_ms = (time.perf_counter() - started) * 1000
         elif events:
             fallback_reason = "llm_unavailable"
 
@@ -113,10 +113,10 @@ class BriefingGenerator:
         )
         return BriefingGenerationResult(
             briefing=briefing,
-            synthesis_calls=synthesis_calls,
-            script_calls=script_calls,
-            synthesis_latency_ms=synthesis_latency_ms,
-            script_latency_ms=script_latency_ms,
+            editorial_calls=editorial_calls,
+            editorial_latency_ms=editorial_latency_ms,
+            usage=usage,
+            llm_succeeded=llm_succeeded,
             fallback_used=bool(fallback_reason),
             fallback_reason=fallback_reason,
         )
@@ -167,8 +167,10 @@ def _sections(events: list[EnrichedNewsEvent]) -> list[BriefingSection]:
     ]
 
 
-def _is_valid_chinese_script(text: str, language: str) -> bool:
-    if len(text) < 40:
+def _is_valid_chinese_script(
+    text: str, language: str, *, minimum_chars: int
+) -> bool:
+    if len(text) < minimum_chars:
         return False
     if not language.lower().startswith("zh"):
         return True

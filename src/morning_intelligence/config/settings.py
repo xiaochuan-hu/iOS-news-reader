@@ -126,7 +126,10 @@ class Settings(BaseSettings):
     morning_source_timeout_seconds: float = Field(default=8, gt=0)
     morning_llm_timeout_seconds: float = Field(default=60, gt=0)
     morning_generation_deadline_seconds: float = Field(default=90, gt=0)
-    morning_background_refresh_enabled: bool = True
+    morning_generation_trigger: Literal["client", "server"] = "client"
+    morning_background_refresh_enabled: bool = False
+    morning_manual_generation_enabled: bool = False
+    morning_min_llm_interval_hours: float = Field(default=20, ge=20, le=168)
     morning_refresh_timezone: str = "Europe/London"
     morning_refresh_time_local: str = "06:00"
     llm_api_key: str = ""

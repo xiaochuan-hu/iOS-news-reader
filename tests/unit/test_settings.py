@@ -11,6 +11,10 @@ def test_default_daily_refresh_configuration() -> None:
 
     assert settings.morning_refresh_timezone == "Europe/London"
     assert settings.morning_refresh_time_local == "06:00"
+    assert settings.morning_generation_trigger == "client"
+    assert settings.morning_background_refresh_enabled is False
+    assert settings.morning_manual_generation_enabled is False
+    assert settings.morning_min_llm_interval_hours == 20
     assert settings.morning_llm_timeout_seconds == 60
     assert settings.morning_generation_deadline_seconds == 90
 

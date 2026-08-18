@@ -1,8 +1,8 @@
 # Morning Intelligence Harness
 
-A single-process FastAPI service that prefetches RSS and Hacker News, clusters publications into real-world events, ranks those events with deterministic personalized scoring, and serves a grounded Chinese spoken briefing to iOS Shortcuts.
+A single-process FastAPI service that turns RSS and Hacker News into one grounded Chinese morning briefing. The iPhone triggers generation at its current local 05:00; Railway persists one fail-closed LLM allowance and the finished briefing in SQLite.
 
-The important latency decision is simple: the alarm does not start a full internet research job. A background refresh maintains ranked events and a ready briefing in SQLite. The normal iPhone path is one authenticated SQLite read from `GET /v1/briefings/latest/text`.
+The alarm never starts research or an LLM request. It only reads `GET /v1/briefings/latest/text` from SQLite. Generation is a separate authenticated `POST /v1/briefings/daily-refresh` automation.
 
 ## What is implemented
 
@@ -12,15 +12,16 @@ The important latency decision is simple: the alarm does not start a full intern
 - Cross-source fuzzy title clustering into `NewsEvent`.
 - Configurable deterministic ranking plus a diversity-aware editorial selection layer.
 - Separate global importance and personal relevance, with soft category targets and no filler quota.
-- OpenAI-compatible batch event synthesis followed by one Chinese spoken-script call.
+- One OpenAI-compatible combined editorial call producing event intelligence and spoken text.
 - Validated Chinese event intelligence: summary, why it matters, watch next, key facts and confidence.
 - Deterministic Chinese fallback when no API key is set or the LLM fails.
-- SQLite persistence for items, events, briefings and pipeline runs.
-- Cold-start/daily scheduled prefetch, cached wake path and bounded incremental refresh.
+- SQLite persistence for items, events, briefings, pipeline runs and the daily LLM budget.
+- Atomic local-calendar and rolling 20-hour budget gates before the outbound request.
+- Startup-safe, cache-only wake path; restart, redeploy and duplicate triggers spend no quota.
 - FastAPI JSON/text contracts, bearer/query-token auth and Docker deployment.
 - Unit, integration, failure and sixteen-case offline evaluation suite.
 
-Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md), [docs/reference-audit.md](docs/reference-audit.md), [docs/decisions/001-build-vs-reuse.md](docs/decisions/001-build-vs-reuse.md), and [docs/decisions/002-editorial-llm-pipeline.md](docs/decisions/002-editorial-llm-pipeline.md).
+Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md), [docs/reference-audit.md](docs/reference-audit.md), [docs/decisions/001-build-vs-reuse.md](docs/decisions/001-build-vs-reuse.md), and [docs/decisions/003-local-daily-single-llm.md](docs/decisions/003-local-daily-single-llm.md).
 
 ## Local development
 
@@ -49,13 +50,13 @@ curl -H "Authorization: Bearer $MORNING_API_TOKEN" \
 curl -X POST \
   -H "Authorization: Bearer $MORNING_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"mode":"wake","target_minutes":5,"incremental_refresh":true}' \
-  http://localhost:8000/v1/briefings/generate
+  -d '{"local_date":"2026-08-19"}' \
+  http://localhost:8000/v1/briefings/daily-refresh
 ```
 
-The very first briefing requires a source fetch. Later GET requests are the low-latency cached
-path. The background scheduler refreshes once per configured local day and follows IANA timezone
-DST rules; a restart with an existing cached briefing does not trigger another LLM call.
+With an empty database, both GET endpoints return `503` until the first daily POST succeeds. GET is
+always the low-latency cache path and never invokes collection or an LLM. Application startup never
+generates, whether the database is empty or populated.
 
 On the 2026-08-17 V2 development smoke run with the committed four public source adapters, a cold no-LLM request completed in 1.68 seconds, selected six events from 32 candidates, and the next cached GET completed in 1.5 milliseconds. These are observations, not service-level guarantees; network, host and feed performance vary.
 
@@ -93,12 +94,12 @@ The evaluation fixtures cover the V1 regressions plus English-to-Chinese synthes
 
 Environment variables control secrets, file paths and operational timeouts. YAML controls sources and preferences. Ranking weights must sum to `1.0`; invalid configuration fails at startup rather than silently changing editorial behavior.
 
-If `LLM_API_KEY` is provided, `LLM_BASE_URL` must expose the OpenAI-compatible `/chat/completions` endpoint. One request synthesizes all selected events into validated Chinese intelligence and one request writes the spoken briefing. Normal generation therefore uses at most two calls, never one call per article. With no key or any provider failure, the deterministic briefing remains available.
+If `LLM_API_KEY` is provided, `LLM_BASE_URL` must expose the OpenAI-compatible `/chat/completions` endpoint. Exactly one attempted request produces both validated event intelligence and spoken text. There is no retry or repair call. A normal day is one request, a 30-day month is about 30 requests, and every GET, restart, redeploy or duplicate daily trigger adds zero. With no key or any provider failure, the deterministic briefing remains available.
 
-`MORNING_REFRESH_TIMEZONE` accepts any IANA timezone, such as `Europe/London` or
-`Asia/Singapore`; change the environment variable without changing code. The local refresh time
-uses strict `HH:MM`. `LLM_THINKING_MODE` is optional and provider-neutral: when unset, no
-`thinking` field is sent.
+`MORNING_GENERATION_TRIGGER=client` is the safe default. The iPhone's system timezone owns 05:00;
+Railway neither guesses location nor uses server time for the production trigger. The old IANA
+timezone settings apply only when the explicitly enabled legacy `server` trigger is used.
+`LLM_THINKING_MODE` is optional and provider-neutral: when unset, no `thinking` field is sent.
 
 `briefing.target_minutes` and `briefing.characters_per_minute` define the requested character budget. `editorial.minimum_score` removes weak events before composition; `editorial.category_targets` are diversity hints rather than quotas. It is valid to return fewer than `briefing.min_events` when the remaining news is not meaningful.
 
@@ -107,12 +108,13 @@ uses strict `HH:MM`. `LLM_THINKING_MODE` is optional and provider-neutral: when 
 Follow [docs/ios-shortcut-setup.md](docs/ios-shortcut-setup.md). The final flow is:
 
 ```text
-Alarm Is Stopped -> Run Morning Brief -> HTTP GET -> Speak Text
+iPhone local 05:00 -> POST daily-refresh -> SQLite
+Alarm Is Stopped -> time guard 05:00–08:59 -> cached GET -> Speak Text
 ```
 
 ## Operational notes
 
-- Run one Uvicorn worker. The daily scheduler is in-process; multiple workers would each refresh.
+- Run one Uvicorn worker. SQLite still makes budget claims safe across concurrent processes.
 - Put a TLS reverse proxy in front of the service before exposing it publicly.
 - Bearer headers are safer than query tokens.
 - Docker disables Uvicorn access logs so a query-token fallback is not written to its default request log. Apply equivalent redaction at any reverse proxy.
@@ -124,5 +126,5 @@ Alarm Is Stopped -> Run Morning Brief -> HTTP GET -> Speak Text
 - No server-side TTS/audio files; iOS Speak Text is the MVP output.
 - No embeddings, Reddit, GitHub releases or deep-dive web research.
 - Fuzzy title clustering is intentionally conservative and language-dependent.
-- The in-process scheduler is designed for a single service process, not a distributed deployment.
+- The optional legacy scheduler remains in-process; production uses the iPhone client trigger.
 - Deterministic fallback preserves source wording and does not translate English headlines; configure an LLM for fully natural Chinese synthesis.

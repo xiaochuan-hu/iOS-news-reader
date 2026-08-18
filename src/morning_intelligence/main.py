@@ -61,7 +61,10 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         task: asyncio.Task[None] | None = None
-        if runtime_settings.morning_background_refresh_enabled:
+        if (
+            runtime_settings.morning_generation_trigger == "server"
+            and runtime_settings.morning_background_refresh_enabled
+        ):
             task = asyncio.create_task(
                 refresh_loop(
                     runtime_service,

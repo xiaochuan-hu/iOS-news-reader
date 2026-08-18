@@ -72,11 +72,12 @@ def deterministic_event_intelligence(event: NewsEvent) -> EventIntelligence:
 def sanitize_spoken_text(text: str, *, max_chars: int = 1800) -> str:
     text = html.unescape(text)
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"\{[^{}]{0,500}\}", " ", text)
     text = re.sub(r"https?://[^\s。！？；，,]+", " ", text)
     text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"[*_`]+", "", text)
-    text = re.sub(r"\[(\d+)\]", "", text)
+    text = re.sub(r"\[[^\]]{1,40}\]|【[^】]{1,40}】", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= max_chars:
         return text.rstrip("，,；; ")

@@ -8,8 +8,7 @@ import httpx
 
 from morning_intelligence.config import PreferencesConfig, Settings
 from morning_intelligence.domain import (
-    EnrichedNewsEvent,
-    EventIntelligence,
+    EditorialBriefingResult,
     NewsEvent,
     NewsItem,
     SourceType,
@@ -45,22 +44,14 @@ class FailingSource:
 
 
 class FailingLLM(LLMProvider):
-    async def score_events(self, events: list[NewsEvent]) -> dict[str, float]:
-        raise TimeoutError("LLM timed out")
-
-    async def synthesize_events(
-        self, events: list[NewsEvent]
-    ) -> dict[str, EventIntelligence]:
-        raise TimeoutError("LLM timed out")
-
-    async def create_spoken_script(
+    async def generate_editorial_briefing(
         self,
-        events: list[EnrichedNewsEvent],
+        events: list[NewsEvent],
         *,
         target_minutes: int,
         language: str,
         characters_per_minute: int,
-    ) -> str:
+    ) -> EditorialBriefingResult:
         raise TimeoutError("LLM timed out")
 
 
@@ -80,7 +71,9 @@ async def test_partial_source_and_llm_failure_still_returns_briefing(tmp_path) -
         llm_provider=FailingLLM(),
     )
 
-    briefing = await service.refresh()
+    result = await service.daily_refresh(datetime.now(UTC).date())
+    assert result.briefing is not None
+    briefing = result.briefing
     assert briefing.event_count == 1
     assert briefing.spoken_text.startswith("早上好")
     assert repository.get_latest_briefing() is not None
@@ -90,9 +83,11 @@ async def test_partial_source_and_llm_failure_still_returns_briefing(tmp_path) -
         )
     assert payload["candidate_events"] == 1
     assert payload["selected_events"] == 1
-    assert payload["llm_synthesis_calls"] == 1
+    assert payload["llm_calls"] == 1
+    assert payload["llm_editorial_calls"] == 1
+    assert payload["llm_synthesis_calls"] == 0
     assert payload["llm_script_calls"] == 0
-    assert payload["fallback_reason"] == "event_synthesis:TimeoutError"
+    assert payload["fallback_reason"] == "combined_editorial:TimeoutError"
 
 
 async def test_total_refresh_failure_returns_cached_briefing(tmp_path) -> None:
@@ -112,9 +107,10 @@ async def test_total_refresh_failure_returns_cached_briefing(tmp_path) -> None:
         collector=CollectorService([FailingSource()], timeout_seconds=1),  # type: ignore[list-item]
         llm_provider=None,
     )
-    result = await service.refresh()
-    assert result.spoken_text == cached.spoken_text
-    assert result.is_fallback is True
+    result = await service.daily_refresh(datetime.now(UTC).date())
+    assert result.briefing is not None
+    assert result.briefing.spoken_text == cached.spoken_text
+    assert result.briefing.is_fallback is True
 
 
 async def _cached_briefing():

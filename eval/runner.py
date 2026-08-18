@@ -14,14 +14,13 @@ from morning_intelligence.briefing import BriefingGenerator
 from morning_intelligence.briefing.spoken_script import deterministic_spoken_script
 from morning_intelligence.config import PreferencesConfig
 from morning_intelligence.domain import (
-    EnrichedNewsEvent,
-    EventIntelligence,
+    EditorialBriefingResult,
     NewsEvent,
     NewsItem,
     SourceType,
 )
 from morning_intelligence.llm import LLMProvider, parse_event_intelligence, parse_json_object
-from morning_intelligence.llm.prompts import EVENT_SYNTHESIS_SYSTEM_PROMPT
+from morning_intelligence.llm.prompts import COMBINED_EDITORIAL_SYSTEM_PROMPT
 from morning_intelligence.processing import (
     EditorialSelector,
     canonicalize_url,
@@ -143,7 +142,7 @@ def _run(case: dict[str, Any]) -> dict[str, Any]:
         passed = result.fallback_used and bool(result.briefing.spoken_text)
         detail = result.fallback_reason
     elif kind == "grounding_prompt":
-        passed = all(phrase in EVENT_SYNTHESIS_SYSTEM_PROMPT for phrase in case["phrases"])
+        passed = all(phrase in COMBINED_EDITORIAL_SYSTEM_PROMPT for phrase in case["phrases"])
         detail = f"rules={len(case['phrases'])}"
     elif kind == "length_control":
         events = [_event(f"事件{index}", index) for index in range(case["event_count"])]
@@ -201,22 +200,14 @@ def _editorial_event(row: dict[str, Any], index: int) -> NewsEvent:
 
 
 class _TimeoutLLM(LLMProvider):
-    async def score_events(self, events: list[NewsEvent]) -> dict[str, float]:
-        raise TimeoutError
-
-    async def synthesize_events(
-        self, events: list[NewsEvent]
-    ) -> dict[str, EventIntelligence]:
-        raise TimeoutError
-
-    async def create_spoken_script(
+    async def generate_editorial_briefing(
         self,
-        events: list[EnrichedNewsEvent],
+        events: list[NewsEvent],
         *,
         target_minutes: int,
         language: str,
         characters_per_minute: int,
-    ) -> str:
+    ) -> EditorialBriefingResult:
         raise TimeoutError
 
 

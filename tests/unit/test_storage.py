@@ -1,11 +1,13 @@
-from datetime import UTC, datetime
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, date, datetime, timedelta
 
 from morning_intelligence.domain import Briefing, NewsEvent
 from morning_intelligence.processing import normalize_item
 from morning_intelligence.storage import SQLiteRepository
 
 
-async def test_latest_briefing_uses_cache_without_refresh(tmp_path) -> None:
+def test_latest_briefing_uses_cache_without_refresh(tmp_path) -> None:
     from morning_intelligence.config import PreferencesConfig, Settings
     from morning_intelligence.domain import Briefing
     from morning_intelligence.services import CollectorService, MorningBriefingService
@@ -26,13 +28,9 @@ async def test_latest_briefing_uses_cache_without_refresh(tmp_path) -> None:
         llm_provider=None,
     )
 
-    async def unexpected_refresh() -> Briefing:
-        raise AssertionError("cached latest request must not refresh")
+    result = service.latest()
 
-    service.refresh = unexpected_refresh  # type: ignore[method-assign]
-
-    result = await service.latest_or_generate()
-
+    assert result is not None
     assert result.id == cached.id
 
 
@@ -64,3 +62,103 @@ def test_sqlite_round_trip_and_novelty_history(tmp_path, make_item) -> None:
     assert events[0].canonical_title == "Important event"
     assert repository.get_latest_briefing() == briefing
     assert repository.recent_spoken_titles(3) == ["Important event"]
+
+
+def test_budget_same_date_and_rolling_interval_are_fail_closed(tmp_path) -> None:
+    repository = SQLiteRepository(tmp_path / "budget.db")
+    repository.initialize()
+    start = datetime(2026, 8, 19, 21, tzinfo=UTC)
+
+    first = _claim(repository, date(2026, 8, 20), start)
+    same_day = _claim(repository, date(2026, 8, 20), start + timedelta(hours=2))
+    travel_day = _claim(repository, date(2026, 8, 21), start + timedelta(hours=19, minutes=59))
+    next_day = _claim(repository, date(2026, 8, 21), start + timedelta(hours=20))
+
+    assert first.claimed is True
+    assert same_day.claimed is False and same_day.reason == "already_claimed"
+    assert travel_day.claimed is False and travel_day.reason == "min_interval"
+    assert next_day.claimed is True
+
+
+def test_failed_completed_claim_remains_consumed_after_restart(tmp_path) -> None:
+    path = tmp_path / "restart.db"
+    first_process = SQLiteRepository(path)
+    first_process.initialize()
+    now = datetime(2026, 8, 19, 5, tzinfo=UTC)
+    claimed = _claim(first_process, date(2026, 8, 19), now)
+    assert claimed.claim is not None
+    first_process.complete_llm_budget_claim(
+        claimed.claim.id,
+        success=False,
+        error="httpx.ReadTimeout",
+        completed_at_utc=now + timedelta(minutes=1),
+    )
+
+    second_process = SQLiteRepository(path)
+    second_process.initialize()
+    repeated = _claim(second_process, date(2026, 8, 19), now + timedelta(hours=3))
+
+    assert repeated.claimed is False
+    assert repeated.reason == "already_claimed"
+    assert repeated.claim is not None and repeated.claim.success is False
+
+
+def test_concurrent_budget_claims_have_exactly_one_winner(tmp_path) -> None:
+    path = tmp_path / "concurrent.db"
+    SQLiteRepository(path).initialize()
+    now = datetime(2026, 8, 19, 5, tzinfo=UTC)
+
+    def attempt(_: int):
+        return _claim(SQLiteRepository(path), date(2026, 8, 19), now)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(attempt, range(2)))
+
+    assert sum(result.claimed for result in results) == 1
+    assert sorted(result.reason for result in results) == ["already_claimed", "claimed"]
+
+
+def test_additive_migration_preserves_legacy_briefing(tmp_path) -> None:
+    path = tmp_path / "legacy.db"
+    legacy = Briefing(
+        generated_at=datetime(2026, 8, 18, 5, tzinfo=UTC),
+        event_count=1,
+        estimated_duration_seconds=12,
+        spoken_text="旧版缓存晨报",
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """CREATE TABLE briefings (
+                id TEXT PRIMARY KEY, generated_at TEXT NOT NULL,
+                spoken_text TEXT NOT NULL, payload TEXT NOT NULL
+            )"""
+        )
+        connection.execute(
+            "INSERT INTO briefings VALUES (?, ?, ?, ?)",
+            (
+                legacy.id,
+                legacy.generated_at.isoformat(),
+                legacy.spoken_text,
+                legacy.model_dump_json(),
+            ),
+        )
+
+    repository = SQLiteRepository(path)
+    repository.initialize()
+
+    assert repository.get_latest_briefing() == legacy
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'llm_daily_budget'"
+        ).fetchone() is not None
+
+
+def _claim(repository: SQLiteRepository, local_date: date, now: datetime):
+    return repository.claim_llm_budget(
+        purpose="morning_editorial",
+        local_date=local_date,
+        now_utc=now,
+        minimum_interval=timedelta(hours=20),
+        provider="openai_compatible",
+        model="test-model",
+    )

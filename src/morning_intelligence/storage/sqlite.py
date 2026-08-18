@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
-from morning_intelligence.domain import Briefing, NewsEvent, NewsItem, PipelineMetrics
+from morning_intelligence.domain import (
+    Briefing,
+    LLMBudgetClaim,
+    LLMBudgetClaimResult,
+    NewsEvent,
+    NewsItem,
+    PipelineMetrics,
+)
 
 
 class SQLiteRepository:
@@ -57,7 +65,116 @@ class SQLiteRepository:
                     status TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS llm_daily_budget (
+                    id TEXT PRIMARY KEY,
+                    purpose TEXT NOT NULL,
+                    local_date TEXT NOT NULL,
+                    claimed_at_utc TEXT NOT NULL,
+                    completed_at_utc TEXT,
+                    success INTEGER,
+                    error TEXT NOT NULL DEFAULT '',
+                    provider TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    UNIQUE(purpose, local_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_llm_budget_purpose_claimed
+                    ON llm_daily_budget(purpose, claimed_at_utc DESC);
                 """
+            )
+
+    def claim_llm_budget(
+        self,
+        *,
+        purpose: str,
+        local_date: date,
+        now_utc: datetime,
+        minimum_interval: timedelta,
+        provider: str,
+        model: str,
+    ) -> LLMBudgetClaimResult:
+        """Atomically consume a fail-closed allowance before any outbound LLM request."""
+        if now_utc.tzinfo is None:
+            raise ValueError("now_utc must be timezone-aware")
+        claimed_at = now_utc.astimezone(UTC)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            same_day = connection.execute(
+                "SELECT * FROM llm_daily_budget WHERE purpose = ? AND local_date = ?",
+                (purpose, local_date.isoformat()),
+            ).fetchone()
+            if same_day is not None:
+                connection.rollback()
+                return LLMBudgetClaimResult(
+                    claimed=False,
+                    reason="already_claimed",
+                    claim=_budget_claim_from_row(same_day),
+                )
+
+            latest = connection.execute(
+                "SELECT * FROM llm_daily_budget WHERE purpose = ? "
+                "ORDER BY claimed_at_utc DESC LIMIT 1",
+                (purpose,),
+            ).fetchone()
+            if latest is not None:
+                previous = _budget_claim_from_row(latest)
+                elapsed = claimed_at - previous.claimed_at_utc.astimezone(UTC)
+                if elapsed < minimum_interval:
+                    connection.rollback()
+                    return LLMBudgetClaimResult(
+                        claimed=False,
+                        reason="min_interval",
+                        claim=previous,
+                    )
+
+            claim = LLMBudgetClaim(
+                id=uuid4().hex,
+                purpose=purpose,
+                local_date=local_date,
+                claimed_at_utc=claimed_at,
+                provider=provider,
+                model=model,
+            )
+            connection.execute(
+                """INSERT INTO llm_daily_budget(
+                    id, purpose, local_date, claimed_at_utc, provider, model
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    claim.id,
+                    claim.purpose,
+                    claim.local_date.isoformat(),
+                    claim.claimed_at_utc.isoformat(),
+                    claim.provider,
+                    claim.model,
+                ),
+            )
+            connection.commit()
+            return LLMBudgetClaimResult(claimed=True, reason="claimed", claim=claim)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def complete_llm_budget_claim(
+        self,
+        claim_id: str,
+        *,
+        success: bool,
+        error: str,
+        completed_at_utc: datetime,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE llm_daily_budget
+                SET completed_at_utc = ?, success = ?, error = ? WHERE id = ?""",
+                (
+                    completed_at_utc.astimezone(UTC).isoformat(),
+                    int(success),
+                    error[:500],
+                    claim_id,
+                ),
             )
 
     def save_items(self, items: list[NewsItem]) -> None:
@@ -183,3 +300,19 @@ def _now_iso() -> str:
 
 def _parse(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _budget_claim_from_row(row: sqlite3.Row) -> LLMBudgetClaim:
+    return LLMBudgetClaim(
+        id=str(row["id"]),
+        purpose=str(row["purpose"]),
+        local_date=datetime.strptime(str(row["local_date"]), "%Y-%m-%d").date(),
+        claimed_at_utc=_parse(str(row["claimed_at_utc"])),
+        completed_at_utc=(
+            _parse(str(row["completed_at_utc"])) if row["completed_at_utc"] else None
+        ),
+        success=bool(row["success"]) if row["success"] is not None else None,
+        error=str(row["error"]),
+        provider=str(row["provider"]),
+        model=str(row["model"]),
+    )

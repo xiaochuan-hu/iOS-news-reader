@@ -7,16 +7,11 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from morning_intelligence.domain import Briefing
-from morning_intelligence.storage import BriefingRepository
-
 logger = logging.getLogger(__name__)
 
 
 class RefreshService(Protocol):
-    repository: BriefingRepository
-
-    async def refresh(self) -> Briefing: ...
+    async def daily_refresh(self, local_date: date) -> object: ...
 
 
 def next_refresh_at(
@@ -56,9 +51,6 @@ async def refresh_loop(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     current_time = now or (lambda: datetime.now(UTC))
-    if service.repository.get_latest_briefing() is None:
-        await _refresh_without_stopping(service)
-
     while True:
         current = current_time()
         scheduled = next_refresh_at(current, timezone_name, refresh_time_local)
@@ -67,12 +59,14 @@ async def refresh_loop(
             (scheduled.astimezone(UTC) - current.astimezone(UTC)).total_seconds(),
         )
         await sleep(delay)
-        await _refresh_without_stopping(service)
+        await _refresh_without_stopping(
+            service, scheduled.astimezone(ZoneInfo(timezone_name)).date()
+        )
 
 
-async def _refresh_without_stopping(service: RefreshService) -> None:
+async def _refresh_without_stopping(service: RefreshService, local_date: date) -> None:
     try:
-        await service.refresh()
+        await service.daily_refresh(local_date)
     except asyncio.CancelledError:
         raise
     except Exception:

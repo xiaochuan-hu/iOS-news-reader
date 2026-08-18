@@ -1,123 +1,112 @@
 # Railway deployment
 
-This deployment keeps the iPhone API contract unchanged while removing the always-on Mac:
+V3 keeps the existing HTTPS, Bearer auth, Docker image, persistent /app/data volume and SQLite
+path. It does not add a Docker VOLUME directive and does not require Redis, a queue, or an external
+scheduler.
 
-```text
-iPhone Alarm Stop
-    -> iOS Shortcut
-    -> HTTPS Railway service
-    -> GET cached morning briefing
-    -> iOS Speak Text
-```
+## Production flow
 
-The production data flow is:
+~~~text
+iPhone current-local-time 05:00 automation
+  -> POST /v1/briefings/daily-refresh
+  -> deterministic editorial selection
+  -> persistent atomic allowance
+  -> one DeepSeek /chat/completions request
+  -> SQLite /app/data/morning_intelligence.db
 
-```text
-Railway persistent FastAPI service
-    -> scheduled background generation
-    -> RSS / Hacker News
-    -> editorial pipeline
-    -> DeepSeek synthesis
-    -> DeepSeek spoken composition
-    -> SQLite /app/data/morning_intelligence.db
-    -> iPhone GET cached text
-```
+Alarm stopped
+  -> GET /v1/briefings/latest/text
+  -> cached text
+  -> Speak Text
+~~~
 
-The scheduler runs in the single FastAPI process. It generates immediately only when the
-database has no briefing, then waits for the next configured local daily time. A redeploy with
-an existing briefing does not spend another LLM call. `ZoneInfo` applies the IANA timezone and
-DST rules. Change `MORNING_REFRESH_TIMEZONE` to another IANA name such as `Asia/Singapore`
-without changing code.
+The iPhone timezone controls 05:00. Railway must not use Europe/London or server time as the V3
+production clock.
 
-## Railway service configuration
+## Volume and process permissions
 
-Deploy one service named `api` from this repository's `feat/railway-deployment` branch. The
-root `railway.toml` selects the Dockerfile builder, `/health`, a 300-second healthcheck timeout,
-and the on-failure restart policy. The Docker command binds `0.0.0.0` and `${PORT:-8000}`.
+Attach a Railway Volume to the API service at:
 
-Create a Railway Volume attached to `api` with mount path:
-
-```text
+~~~text
 /app/data
-```
+~~~
 
-Set the database path to `/app/data/morning_intelligence.db`. Railway mounts Volumes as root,
-so `RAILWAY_RUN_UID=0` lets the image entrypoint assign `/app/data` to UID 10001 before it drops
-privileges. Uvicorn and the application still run as the non-root `morning` user. Local Docker
-does not need this variable and defaults to port 8000.
+Keep MORNING_DATABASE_PATH=/app/data/morning_intelligence.db. Railway mounts Volumes as root, so
+RAILWAY_RUN_UID=0 lets docker-entrypoint.sh give /app/data to UID 10001 before dropping to the
+non-root morning user. Do not add VOLUME to the Dockerfile.
 
-Configure these Railway Variables. Values marked `<secret>` must be entered in Railway and
-must never be committed:
+Repository initialization only executes CREATE TABLE IF NOT EXISTS and CREATE INDEX IF NOT EXISTS.
+The V3 llm_daily_budget migration is additive; existing briefings remain readable during and after
+deployment.
 
-```dotenv
-MORNING_API_TOKEN=<secret>
+## Variables to check manually before deploy
+
+Codex does not modify Railway variables. Retain the two existing secrets without printing or
+changing their values:
+
+~~~dotenv
+MORNING_API_TOKEN=<existing secret>
+LLM_API_KEY=<existing secret>
+~~~
+
+Set or verify:
+
+~~~dotenv
 MORNING_DATABASE_PATH=/app/data/morning_intelligence.db
 MORNING_SOURCES_CONFIG=config/sources.yaml
 MORNING_PREFERENCES_CONFIG=config/preferences.yaml
 MORNING_SOURCE_TIMEOUT_SECONDS=8
 MORNING_LLM_TIMEOUT_SECONDS=60
 MORNING_GENERATION_DEADLINE_SECONDS=90
-MORNING_BACKGROUND_REFRESH_ENABLED=true
-MORNING_REFRESH_TIMEZONE=Europe/London
-MORNING_REFRESH_TIME_LOCAL=06:00
 
-LLM_API_KEY=<secret>
+MORNING_GENERATION_TRIGGER=client
+MORNING_BACKGROUND_REFRESH_ENABLED=false
+MORNING_MANUAL_GENERATION_ENABLED=false
+MORNING_MIN_LLM_INTERVAL_HOURS=20
+
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 LLM_THINKING_MODE=disabled
 
 RAILWAY_RUN_UID=0
-```
+~~~
 
-`OpenAICompatibleProvider` remains provider-neutral. The `thinking` request field is sent only
-when `LLM_THINKING_MODE` is explicitly `enabled` or `disabled`; omit the variable for providers
-that do not implement it.
+Important: production may currently have MORNING_BACKGROUND_REFRESH_ENABLED=true. Change it to
+false. The new client trigger default is an additional safety boundary: an old true value alone
+cannot start the legacy scheduler, but both values should still reflect production intent.
 
-Generate a Railway public domain for `api`. The production endpoint is:
+MORNING_REFRESH_TIMEZONE and MORNING_REFRESH_TIME_LOCAL may remain for legacy server-scheduled
+development, but they have no effect when MORNING_GENERATION_TRIGGER=client.
 
-```text
-https://<railway-domain>/v1/briefings/latest/text
-```
+## Deployment steps
 
-Requests keep the same authorization header:
+1. Confirm the target branch and quality gates locally.
+2. Take or validate a backup of the persistent SQLite volume using the existing Railway process.
+3. Manually update the non-secret variables above while retaining existing secret values.
+4. Deploy the reviewed commit through the normal Railway workflow.
+5. Confirm /health is 200 before triggering generation.
+6. Confirm an unauthenticated protected request is 401.
+7. Confirm the previously persisted briefing ID/text still reads successfully.
+8. Inspect startup logs: there must be no DeepSeek request or pipeline generation.
+9. From an authenticated test, POST today's iPhone-formatted local date exactly once.
+10. Confirm logs show llm_calls=1 and one /chat/completions request.
+11. Repeat the same POST and confirm already_claimed with zero extra calls.
+12. Repeatedly GET latest/text and confirm no extra calls.
+13. Redeploy/restart once and verify the cache and budget claim survive with zero startup calls.
 
-```http
-Authorization: Bearer <MORNING_API_TOKEN>
-```
+No automated development test contacts api.deepseek.com. The first production combined request
+must be an intentional, manually observed E2E check.
 
-The normal GET reads the cached SQLite briefing and should not wait for the LLM. Use
-`POST /v1/briefings/generate` only for a manual refresh, debugging, or emergency regeneration.
-Uvicorn access logs are disabled so the supported query-token fallback is not written to the
-default access log; Bearer authentication remains preferred.
+## 05:00 race
 
-## Deployment and acceptance checks
+Generation may take seconds. If an alarm is stopped at 05:00:05, GET can correctly return the
+previous complete briefing while the new one is still being generated. GET never waits and never
+generates. To make the new briefing more likely to be ready, place the wake alarm at 05:02 or 05:05,
+or trigger generation a few minutes before the alarm; the required local 05:00 automation remains
+supported.
 
-Install the current Railway CLI, run `railway setup agent`, authenticate in the browser when
-prompted, and create or link the `morning-intelligence` project. Set secrets with the CLI's
-`railway variable set KEY --stdin` form so they are not command-line arguments. Configure the
-non-secret variables above, attach the Volume before the production generation test, deploy,
-then run `railway domain`.
+## Rollback
 
-Verify these endpoints without exposing token values:
-
-1. `GET /health` returns `200` without authentication.
-2. `GET /v1/briefings/latest/text` without or with a wrong token returns `401`.
-3. Authenticated `POST /v1/briefings/generate` completes both LLM stages without fallback.
-4. Authenticated `GET /v1/briefings/latest/text` returns Chinese `text/plain` from cache.
-5. Record the briefing ID and timestamp, restart or redeploy, and confirm they remain present.
-
-Railway's current documentation covers the [config-as-code schema](https://docs.railway.com/config-as-code/reference),
-[`PORT` healthchecks](https://docs.railway.com/deployments/healthchecks),
-[persistent Volume paths and permissions](https://docs.railway.com/volumes), and
-[`railway setup agent`](https://docs.railway.com/cli/setup).
-
-## iPhone Shortcut switch
-
-Change only the URL field:
-
-```text
-http://192.168.5.50:8000/v1/briefings/latest/text
--> https://<railway-domain>/v1/briefings/latest/text
-```
-
-Keep `GET`, the Authorization Bearer header, its existing token, and Speak Text unchanged.
+The migration is additive and older briefing rows are unchanged. A code rollback can continue
+reading them. Do not delete or recreate the database. The new budget table should be retained even
+if code is rolled back so audit history is not lost.

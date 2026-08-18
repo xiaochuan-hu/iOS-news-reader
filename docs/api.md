@@ -1,61 +1,87 @@
 # HTTP API
 
-Base URL examples use `http://localhost:8000`. `/health` is public. All `/v1` routes require the configured token; bearer auth is preferred. The query-token fallback exists only for Shortcuts clients that cannot conveniently set a header and must only be used over HTTPS.
+/health is public. Every /v1 route uses the existing Bearer authentication. Examples omit
+the Railway hostname.
 
 ## Health
 
-```http
+~~~http
 GET /health
-```
+~~~
 
-```json
-{"status":"ok"}
-```
+Returns {"status":"ok"}. Startup performs no source or LLM work.
 
 ## Latest cached briefing
 
-```http
+~~~http
 GET /v1/briefings/latest
 Authorization: Bearer TOKEN
-```
+~~~
 
-Returns `id`, `generated_at`, `freshness_minutes`, `event_count`, `estimated_duration_seconds`, `spoken_text`, structured `sections`, `sources` and `is_fallback`. `sections[].text` contains the Chinese event synthesis when the LLM path succeeded. If the database has no briefing yet, the first request attempts one deadline-bounded refresh.
+Returns the existing V2 JSON contract: id, generated_at, freshness_minutes, event_count,
+estimated_duration_seconds, spoken_text, sections, sources, and is_fallback.
 
-## Shortcut text endpoint
-
-```http
+~~~http
 GET /v1/briefings/latest/text
 Authorization: Bearer TOKEN
 Accept: text/plain
-```
+~~~
 
-Response content type is `text/plain; charset=utf-8`; the body is only `spoken_text`.
+Returns only cached spoken_text as text/plain; charset=utf-8. Both GET handlers perform one
+repository read. They never collect sources, generate, wait for an in-flight refresh, or invoke an
+LLM. If there is no persisted briefing, they return 503 with
+"briefing has not been generated yet".
 
-## Generate or refresh
+## Production daily refresh
 
-```http
-POST /v1/briefings/generate
+~~~http
+POST /v1/briefings/daily-refresh
 Authorization: Bearer TOKEN
 Content-Type: application/json
-```
 
-```json
+{"local_date":"2026-08-19"}
+~~~
+
+local_date must be strict YYYY-MM-DD and within one calendar day before or after the current UTC
+date. This accommodates every world timezone without asking Railway to know the iPhone's timezone
+and rejects arbitrary dates that could bypass the calendar gate.
+
+The endpoint collects and deterministically selects news before atomically claiming
+morning_editorial in SQLite. Responses are HTTP 200 and idempotent:
+
+~~~json
 {
-  "mode": "wake",
-  "target_minutes": 5,
-  "incremental_refresh": true,
-  "max_age_minutes": 30
+  "status": "generated",
+  "local_date": "2026-08-19",
+  "briefing_id": "…",
+  "generated_at": "2026-08-18T21:00:18Z",
+  "budget_reason": ""
 }
-```
+~~~
 
-When selected events are newer than `max_age_minutes`, the service skips source collection and synthesizes from cache. Otherwise it attempts a bounded refresh. `target_minutes` changes the spoken character budget and duration estimate. LLM-only failure produces a deterministic briefing without changing the response contract; a complete refresh failure returns the most recent briefing with `is_fallback=true` when one exists. With no cache it returns `503`.
+Statuses are generated, generated_fallback, already_claimed, no_llm_available, or cached. A
+duplicate date or a different date less than 20 hours after the last claim returns already_claimed
+and sends no LLM request. budget_reason distinguishes already_claimed from min_interval.
 
-Normal LLM generation uses two provider calls: one batch structured synthesis and one spoken composition. Unknown event IDs, malformed rows and missing optional fields are handled before the spoken call. No per-article calls are made.
+All-source failure occurs before the claim. It returns the prior cache when available, otherwise
+503; a later POST may retry collection. Any failure after claim consumes that claim permanently.
+Provider failure produces and saves a deterministic fresh fallback without retrying the LLM.
+
+## Legacy manual generation
+
+~~~http
+POST /v1/briefings/generate
+~~~
+
+This existing endpoint is disabled by default with 409 Conflict. Setting
+MORNING_MANUAL_GENERATION_ENABLED=true is intended only for development. Even then it routes
+through the same daily budget and has no force, retry, repair, admin override, or bypass parameter.
 
 ## Errors
 
-- `401`: missing/invalid token.
-- `422`: invalid request body.
-- `503`: generation failed or exceeded the deadline and no cached briefing exists.
+- 401: missing or invalid API token.
+- 409: manual generation is disabled.
+- 422: malformed or out-of-window local_date, or another invalid body.
+- 503: no cache exists for a cache-only GET, or refresh failed before a usable result.
 
-Tokens and authorization headers are never included in application logs.
+Tokens, API keys and Authorization headers are never included in application logs.
