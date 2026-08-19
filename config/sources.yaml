@@ -14,6 +14,46 @@ rss:
     category: technology
     quality: 0.85
     enabled: true
+  - name: OpenAI News
+    url: https://openai.com/news/rss.xml
+    category: ai_llm_agent
+    quality: 0.95
+    enabled: true
+  - name: Google DeepMind
+    url: https://deepmind.google/blog/rss.xml
+    category: ai_llm_agent
+    quality: 0.95
+    enabled: true
+  - name: Hugging Face Blog
+    url: https://huggingface.co/blog/feed.xml
+    category: ai_llm_agent
+    quality: 0.85
+    enabled: true
+  - name: MIT Technology Review
+    url: https://www.technologyreview.com/feed/
+    category: technology
+    quality: 0.85
+    enabled: true
+  - name: arXiv Artificial Intelligence
+    url: https://rss.arxiv.org/rss/cs.AI
+    category: ai_llm_agent
+    quality: 0.78
+    enabled: true
+  - name: arXiv Robotics
+    url: https://rss.arxiv.org/rss/cs.RO
+    category: robotics
+    quality: 0.78
+    enabled: true
+  - name: NVIDIA Robotics
+    url: https://developer.nvidia.com/blog/category/robotics/feed/
+    category: embodied_ai
+    quality: 0.90
+    enabled: true
+  - name: IEEE Spectrum Robotics
+    url: https://spectrum.ieee.org/feeds/topic/robotics.rss
+    category: robotics
+    quality: 0.85
+    enabled: true
 hackernews:
   enabled: true
   fetch_top_stories: 30

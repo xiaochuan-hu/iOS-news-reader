@@ -11,6 +11,8 @@ from morning_intelligence.domain import (
     EditorialBriefingOutput,
     EditorialBriefingResult,
     EventIntelligence,
+    GitHubRepositoryIntelligence,
+    GitHubTrendingRepo,
     LLMUsage,
     NewsEvent,
 )
@@ -44,19 +46,26 @@ class OpenAICompatibleProvider(LLMProvider):
         target_minutes: int,
         language: str,
         characters_per_minute: int,
+        github_repositories: list[GitHubTrendingRepo] | None = None,
     ) -> EditorialBriefingResult:
-        target_chars = target_minutes * characters_per_minute
+        final_target_chars = target_minutes * characters_per_minute
+        github_budget = len(github_repositories or []) * 130 + 80
+        target_chars = max(600, final_target_chars - github_budget)
         minimum_chars = round(target_chars * 0.8)
         maximum_chars = round(target_chars * 1.2)
         user = json.dumps(
             {
                 "language": language,
                 "spoken_target": {
-                    "target_characters": target_chars,
+                    "final_target_characters": final_target_chars,
+                    "news_target_characters": target_chars,
                     "minimum_characters": minimum_chars,
                     "maximum_characters": maximum_chars,
                 },
-                "selected_events": _event_payload(events),
+                "fresh_news_events": _event_payload(events),
+                "github_trending_top10": [
+                    repository.model_dump() for repository in (github_repositories or [])
+                ],
                 "output_schema": {
                     "events": [
                         {
@@ -69,7 +78,14 @@ class OpenAICompatibleProvider(LLMProvider):
                             "source_consensus": "来源共识或分歧",
                         }
                     ],
-                    "spoken_text": "完整的自然简体中文晨间口播纯文本",
+                    "news_spoken_text": "只含新闻的自然简体中文口播纯文本",
+                    "github_repositories": [
+                        {
+                            "repo": "输入中的 owner/name",
+                            "summary_zh": "严格依据输入字段的用途概括",
+                            "why_it_matters": "克制说明为什么值得注意",
+                        }
+                    ],
                 },
             },
             ensure_ascii=False,
@@ -98,7 +114,11 @@ class OpenAICompatibleProvider(LLMProvider):
         body = response.json()
         text = str(body["choices"][0]["message"]["content"]).strip()
         output = parse_editorial_briefing(
-            parse_json_object(text), expected_ids={event.id for event in events}
+            parse_json_object(text),
+            expected_ids={event.id for event in events},
+            expected_repositories={
+                repository.full_name for repository in (github_repositories or [])
+            },
         )
         return EditorialBriefingResult(output=output, usage=parse_llm_usage(body))
 
@@ -137,21 +157,53 @@ def _deduplicated_evidence(event: NewsEvent) -> list[dict[str, Any]]:
                 "source_quality": item.source_quality,
                 "title": item.title,
                 "description": description,
-                "published_at": item.published_at.isoformat(),
+                "published_at": item.published_at.isoformat() if item.published_at else None,
             }
         )
     return evidence
 
 
 def parse_editorial_briefing(
-    data: dict[str, Any], *, expected_ids: set[str]
+    data: dict[str, Any], *, expected_ids: set[str], expected_repositories: set[str] | None = None
 ) -> EditorialBriefingOutput:
     intelligence = parse_event_intelligence(data, expected_ids=expected_ids)
-    spoken_text = data.get("spoken_text", "")
+    spoken_text = data.get("news_spoken_text", data.get("spoken_text", ""))
     return EditorialBriefingOutput(
         events=list(intelligence.values()),
-        spoken_text=spoken_text if isinstance(spoken_text, str) else "",
+        news_spoken_text=spoken_text if isinstance(spoken_text, str) else "",
+        github_repositories=_parse_github_intelligence(
+            data, expected_repositories=expected_repositories or set()
+        ),
     )
+
+
+def _parse_github_intelligence(
+    data: dict[str, Any], *, expected_repositories: set[str]
+) -> list[GitHubRepositoryIntelligence]:
+    rows = data.get("github_repositories", [])
+    if not isinstance(rows, list):
+        return []
+    expected = {repo.casefold(): repo for repo in expected_repositories}
+    seen: set[str] = set()
+    result: list[GitHubRepositoryIntelligence] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("repo", "")).strip().casefold()
+        if key not in expected or key in seen:
+            continue
+        try:
+            result.append(
+                GitHubRepositoryIntelligence(
+                    repo=expected[key],
+                    summary_zh=_clean_text(raw.get("summary_zh", "")),
+                    why_it_matters=_clean_text(raw.get("why_it_matters", "")),
+                )
+            )
+            seen.add(key)
+        except (ValidationError, TypeError, ValueError):
+            continue
+    return result
 
 
 def parse_llm_usage(body: dict[str, Any]) -> LLMUsage:

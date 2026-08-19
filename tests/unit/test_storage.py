@@ -2,7 +2,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 
-from morning_intelligence.domain import Briefing, NewsEvent
+from morning_intelligence.domain import Briefing, GitHubTrendingRepo, NewsEvent
 from morning_intelligence.processing import normalize_item
 from morning_intelligence.storage import SQLiteRepository
 
@@ -151,6 +151,39 @@ def test_additive_migration_preserves_legacy_briefing(tmp_path) -> None:
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'llm_daily_budget'"
         ).fetchone() is not None
+
+
+def test_github_snapshot_round_trip_is_scoped_to_exact_date(tmp_path) -> None:
+    repository = SQLiteRepository(tmp_path / "github.db")
+    repository.initialize()
+    snapshot_date = date(2026, 8, 20)
+    repositories = [
+        GitHubTrendingRepo(
+            rank=rank,
+            full_name=f"owner/repo-{rank}",
+            url=f"https://github.com/owner/repo-{rank}",
+            description=f"Repo {rank}",
+            stars_today=rank * 10,
+        )
+        for rank in range(1, 11)
+    ]
+
+    repository.save_github_trending_snapshot(
+        snapshot_date,
+        repositories,
+        fetched_at_utc=datetime(2026, 8, 20, 5, tzinfo=UTC),
+    )
+
+    assert repository.get_github_trending_snapshot(snapshot_date) == repositories
+    assert repository.get_github_trending_snapshot(date(2026, 8, 19)) == []
+    with sqlite3.connect(repository.path) as connection:
+        table_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    assert all("weather" not in name.casefold() for name in table_names)
 
 
 def _claim(repository: SQLiteRepository, local_date: date, now: datetime):

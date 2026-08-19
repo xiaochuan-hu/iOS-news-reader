@@ -117,3 +117,24 @@ def test_non_event_hacker_news_tutorial_is_demoted(make_item) -> None:
     selection = EditorialSelector(preferences).select([event])
 
     assert selection.events == []
+
+
+def test_robotics_target_is_soft_and_never_bypasses_minimum_score(make_item) -> None:
+    preferences = PreferencesConfig.model_validate(
+        {
+            "briefing": {"min_events": 1, "max_events": 5},
+            "editorial": {"minimum_score": 0.5},
+        }
+    )
+    important_world = _event(make_item, 1, "world", 0.82)
+    important_robotics = _event(make_item, 2, "robotics", 0.76)
+    stale_quality_robotics = _event(make_item, 3, "embodied_ai", 0.15)
+
+    selection = EditorialSelector(preferences).select(
+        [important_world, important_robotics, stale_quality_robotics]
+    )
+
+    assert {event.id for event in selection.events} == {
+        important_world.id,
+        important_robotics.id,
+    }

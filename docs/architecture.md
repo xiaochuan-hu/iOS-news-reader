@@ -1,117 +1,76 @@
-# V3 architecture
+# V4 architecture
 
-## Two independent iPhone flows
-
-~~~text
-Generation
-iPhone current local time 05:00
-  -> authenticated POST /v1/briefings/daily-refresh {local_date}
-  -> collect, normalize, deduplicate, cluster, score, select
-  -> SQLite atomic daily + rolling interval claim
-  -> one combined OpenAI-compatible /chat/completions request
-  -> validate or deterministically fall back
-  -> INSERT complete briefing in SQLite
-
-Playback
-Any alarm is stopped
-  -> device-hour guard 05:00–08:59
-  -> authenticated GET /v1/briefings/latest/text
-  -> SQLite cache read
-  -> iOS Speak Text
-~~~
-
-The flows do not call each other. The iPhone system timezone owns the 05:00 schedule, so travel
-automatically follows Asia/Shanghai, Asia/Singapore, Europe/London, or the current US timezone.
-Railway does not infer the location and server timezone does not define the production schedule.
-
-## Before and after
-
-V2 used an in-process Railway timezone scheduler, generated on an empty startup, allowed GET to
-generate on cache miss, and normally called the LLM once for event synthesis plus once for spoken
-composition.
-
-V3 defaults to client-triggered generation. Startup and GET never invoke an LLM. Deterministic
-selection is unchanged, but one combined editorial request returns structured intelligence and
-the final spoken narrative. A persistent fail-closed budget is claimed before that request.
-
-## Persistent budget and concurrency
-
-The additive llm_daily_budget table contains:
+## Generation and playback
 
 ~~~text
-id TEXT PRIMARY KEY
-purpose TEXT NOT NULL
-local_date TEXT NOT NULL
-claimed_at_utc TEXT NOT NULL
-completed_at_utc TEXT NULL
-success INTEGER NULL
-error TEXT NOT NULL
-provider TEXT NOT NULL
-model TEXT NOT NULL
-UNIQUE(purpose, local_date)
+iPhone current-local-time 05:00
+  -> POST /v1/briefings/daily-refresh {local_date}
+  -> freeze pipeline_start_utc and rolling 24-hour window
+  -> collect YAML-configured news + fetch official GitHub Trending Today
+  -> reject missing, future, and older-than-24h news timestamps
+  -> normalize, deduplicate, cluster, score, and select
+  -> SQLite BEGIN IMMEDIATE daily + 20-hour rolling budget claim
+  -> at most one combined /chat/completions request
+  -> validate; deterministically fill missing GitHub rows
+  -> Python date intro + news + GitHub ranks 1–10
+  -> save complete briefing and audit metrics in SQLite
+
+Alarm stopped
+  -> GET /v1/briefings/latest/text (cache only)
+  -> iPhone gets current-location weather at playback time
+  -> iPhone combines backend text + deterministic weather text
+  -> Speak Text
 ~~~
 
-The repository opens BEGIN IMMEDIATE, checks the unique local date, checks the newest claim against
-MORNING_MIN_LLM_INTERVAL_HOURS (minimum/default 20), inserts the claim, and commits. Only after that
-commit may the provider send HTTP. SQLite's write lock makes this safe across concurrent requests
-and processes; asyncio.Lock only avoids duplicate collection work inside one process.
+Backend weather architecture: none. There is no location request field, weather provider, weather
+HTTP request, weather model, weather database table, weather setting, or backend weather outro.
 
-Completion fields are observability only. HTTP 400/500, timeout, malformed output, validation
-failure, cancellation, or a process crash never reopens the allowance. There is no automatic
-provider retry or validation repair call.
+## Freshness and source coverage
 
-## Combined editorial call
+The service fixes window_end_utc at pipeline start and window_start_utc exactly 24 hours earlier.
+The collector receives this lower bound, and the service independently applies the authoritative
+inclusive filter before normalization. A source cannot bypass freshness by ignoring `since`.
+Missing or timezone-naive timestamps, timestamps before the lower bound, and timestamps after the
+fixed upper bound are rejected. The window never expands when supply is low.
 
-The input retains each selected event's ID, canonical title, first/latest timestamps, categories,
-source count, deterministic/global/editorial scores, and each source's name, quality, title,
-description and timestamp. Exactly duplicate descriptions are omitted while their source records
-remain.
+AI, technology, embodied AI, and robotics discovery uses verified feeds in config/sources.yaml.
+Classification keywords help discovery, but selection still requires deterministic minimum score,
+source quality, recency, confirmation, global importance, novelty, and secondary personal relevance.
+Category targets are soft diversity hints, never filler quotas.
 
-The JSON response contains events with summary_zh, why_it_matters, watch_next, key_facts,
-confidence and source_consensus, plus spoken_text. Unknown event IDs are ignored, the first valid
-duplicate wins, malformed rows are isolated, and missing rows use deterministic intelligence.
-Spoken text is sanitized and checked for Chinese content and the configured 80–120 percent
-character range. Invalid prose uses the deterministic script; it never triggers a repair call.
+## GitHub Trending Today
 
-The prompt separates verified facts from interpretation and uncertainty, compares sources, avoids
-unsupported model knowledge, gives major stories more depth, and asks for a natural approximately
-five-minute Chinese narrative rather than numbered RSS summaries.
+GitHubTrendingProvider fetches `https://github.com/trending?since=daily` with no language filter.
+The standard-library HTML parser preserves page order and returns the first ten valid repository
+articles. GitHub is a Today ranking snapshot; repositories need not have been created in the news
+24-hour window.
 
-## Cache and failure model
+Rows are stored in additive `github_trending_snapshots` keyed by snapshot_date and rank. A fetch
+failure may use only the requested local_date's cached rows. With no same-day snapshot, the spoken
+section says the ranking is unavailable. It never uses an older snapshot or triggers another LLM
+request.
 
-The existing briefing is never deleted. Source work and LLM work happen before the new complete
-briefing is inserted, so GET remains fast and may return yesterday's briefing during the 05:00
-generation window. All-source failure happens before claim and may be retried later. Failure after
-claim creates and saves a deterministic fresh fallback when possible; if the deterministic path
-also fails, the previous cache remains.
+The combined response may include one summary per input repo. Unknown repos are ignored and the
+first valid duplicate wins. Python iterates the original ranks 1–10 and uses description, language,
+and stars_today for every missing row. Thus LLM omission cannot remove or reorder a repository.
 
-An empty database starts normally: /health returns 200 and both latest endpoints return 503 until
-the iPhone sends a successful daily refresh.
+## One-request budget and failure model
 
-## Scheduler and manual endpoint
+The V3 invariants remain unchanged. `llm_daily_budget` has UNIQUE(purpose, local_date), and an
+atomic `BEGIN IMMEDIATE` transaction also checks the newest claim is at least 20 hours old. The
+claim commits before outbound LLM HTTP. Failure consumes it; there is no retry, repair, per-topic,
+or per-repository request.
 
-MORNING_GENERATION_TRIGGER=client is the production default. The legacy scheduler starts only when
-trigger=server and MORNING_BACKGROUND_REFRESH_ENABLED=true; it no longer refreshes at startup and
-uses the same budgeted service method. The old timezone/time variables apply only to that mode.
+All-news-source failure happens before claim. After claim, any provider or validation failure saves
+the deterministic date + fresh news + GitHub fallback. The previous complete cache remains readable
+until a replacement is fully saved. Startup and both GET endpoints are always cache-only.
 
-POST /v1/briefings/generate defaults to 409. If explicitly enabled for development, it enters the
-same budgeted workflow and has no bypass.
+## Metrics and spoken structure
 
-## Metrics and invariants
+Pipeline metrics include fixed window bounds, stale/missing/future rejection counts, fresh item
+count, GitHub fetch success/count/snapshot date, existing selection/category counts, LLM calls,
+tokens, latency, fallback reason, and final duration.
 
-Pipeline runs record llm_calls, llm_editorial_calls, prompt/completion/total tokens, prompt cache
-hit/miss tokens when supplied, editorial latency, fallback reason, event/category counts, briefing
-characters, duration and total latency. Legacy synthesis/script fields remain zero on V3.
-
-The production invariants are:
-
-1. GET endpoints never invoke an LLM.
-2. Startup never invokes an LLM.
-3. The claim is committed before outbound HTTP.
-4. A failed attempt consumes the claim.
-5. No automatic LLM retry or repair exists.
-6. Each purpose/local_date has at most one claim.
-7. Claims are at least 20 hours apart.
-8. Concurrent attempts cannot both claim.
-9. Location scheduling belongs to the iPhone.
-10. One request produces both intelligence and spoken text.
+Backend spoken order is deterministic: date intro, important fresh news, natural AI/technology/
+embodied coverage, then GitHub ranks 1–10. It ends after the GitHub section without a sign-off so the
+iPhone can naturally append “最后来看一下天气……” at actual playback time.

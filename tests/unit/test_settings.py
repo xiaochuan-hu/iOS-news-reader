@@ -17,6 +17,7 @@ def test_default_daily_refresh_configuration() -> None:
     assert settings.morning_min_llm_interval_hours == 20
     assert settings.morning_llm_timeout_seconds == 60
     assert settings.morning_generation_deadline_seconds == 90
+    assert settings.morning_auxiliary_timeout_seconds == 8
 
 
 @pytest.mark.parametrize("timezone", ["Europe/London", "Asia/Singapore", "UTC"])

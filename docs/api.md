@@ -18,8 +18,8 @@ GET /v1/briefings/latest
 Authorization: Bearer TOKEN
 ~~~
 
-Returns the existing V2 JSON contract: id, generated_at, freshness_minutes, event_count,
-estimated_duration_seconds, spoken_text, sections, sources, and is_fallback.
+Returns the existing JSON contract plus additive news_window_start, news_window_end, and
+github_trending_count metadata.
 
 ~~~http
 GET /v1/briefings/latest/text
@@ -66,6 +66,12 @@ and sends no LLM request. budget_reason distinguishes already_claimed from min_i
 All-source failure occurs before the claim. It returns the prior cache when available, otherwise
 503; a later POST may retry collection. Any failure after claim consumes that claim permanently.
 Provider failure produces and saves a deterministic fresh fallback without retrying the LLM.
+
+The request body has exactly one field: local_date. Unknown fields are rejected. In particular,
+there is no weather_location: the backend has no weather functionality.
+
+News items must satisfy the inclusive window_start <= published_at <= pipeline_start rule. GitHub
+repositories use a separate freshness concept: the official global Trending Today page snapshot.
 
 ## Legacy manual generation
 

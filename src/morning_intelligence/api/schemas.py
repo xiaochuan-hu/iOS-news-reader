@@ -4,7 +4,7 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from morning_intelligence.domain import Briefing, BriefingSection
 
@@ -21,6 +21,8 @@ class GenerateBriefingRequest(BaseModel):
 
 
 class DailyRefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     local_date: date
 
     @field_validator("local_date", mode="before")
@@ -60,6 +62,9 @@ class BriefingResponse(BaseModel):
     sections: list[BriefingSection]
     sources: list[str]
     is_fallback: bool = False
+    news_window_start: datetime | None = None
+    news_window_end: datetime | None = None
+    github_trending_count: int = 0
 
     @classmethod
     def from_domain(cls, briefing: Briefing) -> BriefingResponse:
@@ -77,4 +82,7 @@ class BriefingResponse(BaseModel):
             sections=briefing.sections,
             sources=briefing.sources,
             is_fallback=briefing.is_fallback,
+            news_window_start=briefing.news_window_start,
+            news_window_end=briefing.news_window_end,
+            github_trending_count=briefing.github_trending_count,
         )

@@ -1,80 +1,54 @@
 # iPhone Shortcuts setup
 
-V3 uses two independent Shortcuts automations. The phone's current system timezone controls the
-schedule, so travel requires no Railway timezone change.
+V4 keeps generation and playback independent. The phone's current timezone owns local 05:00, and
+current-location weather is fetched by the phone at actual playback time.
 
-## A. Daily generation at local 05:00
+## A. Morning Brief Refresh at local 05:00
 
-Create a Shortcut named Morning Brief Refresh:
-
-1. Add Current Date.
-2. Add Format Date, choose Custom, and enter yyyy-MM-dd.
-3. Add URL: https://YOUR_HOST/v1/briefings/daily-refresh.
-4. Add Get Contents of URL:
-   - Method: POST.
-   - Header Authorization: Bearer YOUR_TOKEN.
-   - Request Body: JSON.
-   - local_date: the formatted date from step 2.
-5. Optionally inspect/log the returned status while testing. Do not add Speak Text.
-
-Create its Personal Automation:
-
-1. Shortcuts -> Automation -> + -> Time of Day.
-2. Select 05:00 and Daily.
-3. Choose Run Immediately and disable confirmation if offered.
-4. Add Run Shortcut -> Morning Brief Refresh.
-
-The request is intentionally simple:
-
-~~~json
-{"local_date":"2026-08-19"}
-~~~
-
-No IANA timezone, JWT, signature, or Unix timestamp is required.
-
-## B. Speak the cached briefing after an alarm
-
-Keep or update the existing Morning Brief Shortcut:
+Create or retain `Morning Brief Refresh`:
 
 1. Current Date.
-2. Format Date with custom H (the device's 0–23 hour).
-3. Convert the formatted hour to Number.
-4. If the number is at least 5 and at most 8:
-   - URL: https://YOUR_HOST/v1/briefings/latest/text.
-   - Get Contents of URL with GET.
-   - Header Authorization: Bearer YOUR_TOKEN.
-   - If the response has a value, Speak Text using the preferred Chinese voice.
-5. Otherwise, end the Shortcut without a request.
+2. Format Date with custom `yyyy-MM-dd`.
+3. URL: `https://YOUR_HOST/v1/briefings/daily-refresh`.
+4. Get Contents of URL: POST, Bearer Authorization header, JSON body with `local_date` set to the
+   formatted date.
+5. Do not add Speak Text or any weather action.
 
-Create or retain the Personal Automation:
+The complete body remains:
 
-1. Alarm -> Is Stopped -> Any Alarm (or the desired Wake-Up alarm).
-2. Choose Run Immediately.
-3. Run Shortcut -> Morning Brief.
+~~~json
+{"local_date":"2026-08-20"}
+~~~
 
-This flow is cache-only. Running it once, ten times or one hundred times creates zero additional
-DeepSeek requests. Do not add POST /daily-refresh or POST /generate to the alarm Shortcut, and do
-not retry generation if Speak Text is empty.
+There is no `weather_location`. Configure a daily 05:00 Personal Automation to run this Shortcut
+immediately.
 
-## Authentication and security
+## B. Morning Brief after an alarm
 
-Use the existing MORNING_API_TOKEN only. Never put LLM_API_KEY on the phone. Bearer headers are
-preferred; the existing query-token fallback remains compatible but may be exposed in proxy logs,
-so use it only over HTTPS with query-string logging disabled.
+Retain the device-hour guard (05:00–08:59), then:
 
-## Timing behavior
+1. GET `https://YOUR_HOST/v1/briefings/latest/text` with the existing Bearer header.
+2. Use Shortcuts' `Get Current Weather` at `Current Location`.
+3. Extract City, Condition, Daily Low, Daily High, and Precipitation Probability.
+4. Use Text actions to construct a deterministic sentence such as: “最后来看一下天气。今天滨州
+   预计多云，最低气温二十二度，最高气温三十一度，降水概率百分之四十。”
+5. Combine the cached backend text, a line break, and the weather sentence.
+6. Speak the combined text with the preferred Chinese voice.
 
-At 05:00 the new briefing can still be in flight. Stopping an alarm at 05:00:05 may read yesterday's
-complete cache. That is expected: GET neither waits nor calls the LLM, and the old cache remains
-readable until the new briefing is fully saved. A 05:02/05:05 wake alarm, or generation a few
-minutes before the wake alarm, reduces this race.
+Create or retain the `Alarm -> Is Stopped -> Run Immediately -> Morning Brief` automation. Do not
+put POST daily-refresh or POST generate in this playback Shortcut. Repeated playback GETs produce
+zero source, GitHub, or DeepSeek requests.
 
-## Device verification
+Because weather is obtained at playback rather than 05:00 generation, it follows the phone's actual
+location and freshest Apple Weather result. The backend never receives location data and never
+contacts a weather or geocoding API.
 
-- Run Morning Brief Refresh once with a valid local_date and verify status generated.
-- Run it again and verify already_claimed.
-- Run Morning Brief repeatedly and confirm identical cached text and no extra provider call.
-- Test both Shortcuts while the phone is locked and once on cellular data.
-- Stop a test alarm between 05:00 and 08:59 and confirm speech.
-- Stop a test alarm outside that window and confirm the Shortcut does not call the API.
-- After a timezone change, confirm the Time of Day automation follows the phone's new local 05:00.
+## Authentication, timing, and verification
+
+Keep `LLM_API_KEY` off the phone. Use the existing API token in a Bearer header over HTTPS. At
+05:00:05 a briefing may still be generating, so cache-only GET can correctly return the prior
+complete briefing; a 05:02/05:05 wake alarm reduces this race.
+
+Verify: first refresh is generated, duplicate refresh is already_claimed, repeated GET text is
+identical, weather changes with the device's current location, the final spoken order is backend
+date/news/GitHub followed by iPhone weather, and no API request occurs outside the hour guard.

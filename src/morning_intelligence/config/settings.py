@@ -98,7 +98,7 @@ class RankingWeights(BaseModel):
 
 class ProcessingConfig(BaseModel):
     fuzzy_title_threshold: int = Field(default=76, ge=40, le=100)
-    lookback_hours: int = Field(default=30, ge=1, le=168)
+    lookback_hours: int = Field(default=24, ge=1, le=168)
     novelty_lookback_days: int = Field(default=3, ge=1, le=30)
 
 
@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     morning_sources_config: Path = Path("config/sources.yaml")
     morning_preferences_config: Path = Path("config/preferences.yaml")
     morning_source_timeout_seconds: float = Field(default=8, gt=0)
+    morning_auxiliary_timeout_seconds: float = Field(default=8, gt=0)
     morning_llm_timeout_seconds: float = Field(default=60, gt=0)
     morning_generation_deadline_seconds: float = Field(default=90, gt=0)
     morning_generation_trigger: Literal["client", "server"] = "client"

@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from morning_intelligence.domain import NewsEvent
+from morning_intelligence.domain import GitHubTrendingRepo, NewsEvent
 from morning_intelligence.llm import OpenAICompatibleProvider, parse_editorial_briefing
 from morning_intelligence.llm.prompts import COMBINED_EDITORIAL_SYSTEM_PROMPT
 
@@ -95,7 +95,8 @@ async def test_combined_provider_makes_exactly_one_grounded_json_request(make_it
     assert request["response_format"] == {"type": "json_object"}
     assert request["thinking"] == {"type": "disabled"}
     assert "事实边界" in request["messages"][0]["content"]  # type: ignore[index]
-    selected = json.loads(request["messages"][1]["content"])["selected_events"]  # type: ignore[index]
+    user_payload = json.loads(request["messages"][1]["content"])  # type: ignore[index]
+    selected = user_payload["fresh_news_events"]
     assert selected[0]["event_id"] == "event-1"
     assert selected[0]["global_importance"] == 0.85
     assert len(selected[0]["evidence"]) == 2
@@ -122,6 +123,70 @@ def test_combined_parser_isolates_bad_unknown_and_duplicate_rows() -> None:
     )
     assert [row.event_id for row in output.events] == ["second"]
     assert output.events[0].summary_zh == "第二件事"
+
+
+def test_combined_parser_accepts_only_first_valid_input_github_repository() -> None:
+    output = parse_editorial_briefing(
+        {
+            "events": [],
+            "news_spoken_text": "新闻正文",
+            "github_repositories": [
+                {"repo": "owner/known", "summary_zh": "首个有效概括"},
+                {"repo": "OWNER/KNOWN", "summary_zh": "重复不得覆盖"},
+                {"repo": "owner/unknown", "summary_zh": "未知不得进入"},
+            ],
+        },
+        expected_ids=set(),
+        expected_repositories={"owner/known"},
+    )
+
+    assert len(output.github_repositories) == 1
+    assert output.github_repositories[0].repo == "owner/known"
+    assert output.github_repositories[0].summary_zh == "首个有效概括"
+
+
+async def test_combined_provider_sends_github_in_same_single_request(make_item) -> None:
+    calls: list[dict[str, object]] = []
+    repository = GitHubTrendingRepo(
+        rank=1,
+        full_name="owner/repo",
+        url="https://github.com/owner/repo",
+        description="Only supplied repository description",
+        language="Python",
+        stars_today=123,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        content = {
+            "events": [],
+            "news_spoken_text": _long_chinese_script(),
+            "github_repositories": [
+                {
+                    "repo": "owner/repo",
+                    "summary_zh": "只依据输入的项目描述",
+                    "why_it_matters": "今天的关注度值得观察",
+                }
+            ],
+        }
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(content)}}]},
+            request=request,
+        )
+
+    result = await _provider(handler).generate_editorial_briefing(
+        [_event(make_item)],
+        target_minutes=9,
+        language="zh-CN",
+        characters_per_minute=260,
+        github_repositories=[repository],
+    )
+
+    assert len(calls) == 1
+    payload = json.loads(calls[0]["messages"][1]["content"])  # type: ignore[index]
+    assert payload["github_trending_top10"][0]["full_name"] == "owner/repo"
+    assert result.output.github_repositories[0].repo == "owner/repo"
 
 
 @pytest.mark.parametrize("thinking_mode", [None, "disabled", "enabled"])
@@ -227,7 +292,7 @@ def test_combined_prompt_enforces_grounding_and_natural_spoken_output() -> None:
         "来源有分歧",
         "why_it_matters",
         "global_importance",
-        "约五分钟",
+        "约九分钟",
         "不要机械说第一条",
         "不得输出网址",
     ):

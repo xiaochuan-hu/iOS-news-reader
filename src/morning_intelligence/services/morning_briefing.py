@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from dataclasses import dataclass
@@ -9,7 +10,13 @@ from typing import Literal
 
 from morning_intelligence.briefing import BriefingGenerator
 from morning_intelligence.config import PreferencesConfig, Settings
-from morning_intelligence.domain import Briefing, PipelineMetrics, PipelineStatus
+from morning_intelligence.domain import (
+    Briefing,
+    GitHubTrendingRepo,
+    NewsItem,
+    PipelineMetrics,
+    PipelineStatus,
+)
 from morning_intelligence.llm import LLMProvider
 from morning_intelligence.processing import (
     EditorialSelector,
@@ -19,6 +26,7 @@ from morning_intelligence.processing import (
     score_event,
     title_similarity,
 )
+from morning_intelligence.providers import GitHubTrendingProvider
 from morning_intelligence.storage import BriefingRepository
 
 from .collector import CollectorService
@@ -43,6 +51,14 @@ class DailyRefreshResult:
     budget_reason: str = ""
 
 
+@dataclass(frozen=True)
+class FreshnessFilterResult:
+    items: list[NewsItem]
+    stale_rejected: int
+    missing_timestamp_rejected: int
+    future_rejected: int
+
+
 class MorningBriefingService:
     def __init__(
         self,
@@ -52,12 +68,14 @@ class MorningBriefingService:
         repository: BriefingRepository,
         collector: CollectorService,
         llm_provider: LLMProvider | None,
+        github_provider: GitHubTrendingProvider | None = None,
     ) -> None:
         self.settings = settings
         self.preferences = preferences
         self.repository = repository
         self.collector = collector
         self.llm_provider = llm_provider
+        self.github_provider = github_provider
         self.generator = BriefingGenerator(llm_provider)
         self.editorial_selector = EditorialSelector(preferences)
         # Optimization only. SQLite BEGIN IMMEDIATE is the cross-process correctness lock.
@@ -108,16 +126,47 @@ class MorningBriefingService:
         selected = []
         claim_id = ""
         try:
-            since = now_utc - timedelta(hours=self.preferences.processing.lookback_hours)
-            collected = await self.collector.collect(since)
+            if now_utc.tzinfo is None:
+                raise ValueError("now_utc must be timezone-aware")
+            window_end_utc = now_utc.astimezone(UTC)
+            window_start_utc = window_end_utc - timedelta(hours=24)
+            metrics.news_window_start_utc = window_start_utc
+            metrics.news_window_end_utc = window_end_utc
+
+            collection_task = asyncio.create_task(self.collector.collect(window_start_utc))
+            github_task = (
+                asyncio.create_task(self.github_provider.fetch_today())
+                if self.github_provider is not None
+                else None
+            )
+            try:
+                collected = await collection_task
+            except BaseException:
+                if github_task is not None:
+                    github_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await github_task
+                raise
+            github_repositories = await self._github_repositories(
+                github_task, local_date=local_date, now_utc=window_end_utc, metrics=metrics
+            )
             metrics.sources_succeeded = sum(o.succeeded for o in collected.outcomes)
             metrics.sources_failed = sum(not o.succeeded for o in collected.outcomes)
-            metrics.errors = [o.error for o in collected.outcomes if o.error]
+            metrics.errors.extend(o.error for o in collected.outcomes if o.error)
             metrics.items_fetched = len(collected.items)
             if collected.all_failed or not collected.outcomes:
                 raise RuntimeError("all configured news sources failed")
 
-            normalized = [normalize_item(item) for item in collected.items]
+            freshness = filter_fresh_news_items(
+                collected.items,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+            )
+            metrics.items_rejected_stale = freshness.stale_rejected
+            metrics.items_rejected_missing_timestamp = freshness.missing_timestamp_rejected
+            metrics.items_rejected_future = freshness.future_rejected
+            metrics.fresh_items_count = len(freshness.items)
+            normalized = [normalize_item(item) for item in freshness.items]
             deduplicated = deduplicate_items(normalized)
             metrics.items_after_dedup = len(deduplicated)
             events = cluster_items(
@@ -196,6 +245,10 @@ class MorningBriefingService:
                 target_minutes=self.preferences.briefing.target_minutes,
                 language=self.preferences.language,
                 characters_per_minute=self.preferences.briefing.characters_per_minute,
+                local_date=local_date,
+                github_repositories=github_repositories,
+                news_window_start=window_start_utc,
+                news_window_end=window_end_utc,
             )
             briefing = generation.briefing
             metrics.llm_calls = generation.editorial_calls
@@ -254,6 +307,12 @@ class MorningBriefingService:
                         target_minutes=self.preferences.briefing.target_minutes,
                         language=self.preferences.language,
                         characters_per_minute=self.preferences.briefing.characters_per_minute,
+                        local_date=local_date,
+                        github_repositories=(
+                            self.repository.get_github_trending_snapshot(local_date)
+                        ),
+                        news_window_start=metrics.news_window_start_utc,
+                        news_window_end=metrics.news_window_end_utc,
                     )
                     self.repository.save_briefing(fallback.briefing)
                     metrics.fallback_used = True
@@ -280,7 +339,9 @@ class MorningBriefingService:
                 "pipeline_run run_id=%s status=%s sources=%d/%d items=%d events=%d "
                 "candidates=%d selected=%d categories=%s llm_calls=%d "
                 "llm_editorial_calls=%d fallback=%s prompt_tokens=%d "
-                "completion_tokens=%d total_latency_ms=%.1f",
+                "completion_tokens=%d freshness_window_hours=24 fresh_items=%d "
+                "stale_rejected=%d missing_timestamp_rejected=%d future_rejected=%d "
+                "github_count=%d github_fetch_success=%s total_latency_ms=%.1f",
                 metrics.run_id,
                 metrics.status,
                 metrics.sources_succeeded,
@@ -298,5 +359,58 @@ class MorningBriefingService:
                 metrics.fallback_reason or "none",
                 metrics.prompt_tokens,
                 metrics.completion_tokens,
+                metrics.fresh_items_count,
+                metrics.items_rejected_stale,
+                metrics.items_rejected_missing_timestamp,
+                metrics.items_rejected_future,
+                metrics.github_trending_count,
+                metrics.github_fetch_success,
                 metrics.total_latency_ms,
             )
+
+    async def _github_repositories(
+        self,
+        task: asyncio.Task[list[GitHubTrendingRepo]] | None,
+        *,
+        local_date: date,
+        now_utc: datetime,
+        metrics: PipelineMetrics,
+    ) -> list[GitHubTrendingRepo]:
+        repositories: list[GitHubTrendingRepo] = []
+        if task is not None:
+            try:
+                repositories = await task
+                self.repository.save_github_trending_snapshot(
+                    local_date, repositories, fetched_at_utc=now_utc
+                )
+                metrics.github_fetch_success = True
+            except Exception as exc:
+                metrics.errors.append(f"github:{type(exc).__name__}: {exc}"[:500])
+        if not repositories:
+            repositories = self.repository.get_github_trending_snapshot(local_date)
+        metrics.github_trending_count = len(repositories)
+        metrics.github_snapshot_date = local_date if repositories else None
+        return repositories
+
+
+def filter_fresh_news_items(
+    items: list[NewsItem], *, window_start_utc: datetime, window_end_utc: datetime
+) -> FreshnessFilterResult:
+    """Authoritative inclusive rolling-window filter applied before normalization."""
+    if window_start_utc.tzinfo is None or window_end_utc.tzinfo is None:
+        raise ValueError("freshness window must be timezone-aware")
+    fresh: list[NewsItem] = []
+    stale = missing = future = 0
+    for item in items:
+        published = item.published_at
+        if published is None or published.tzinfo is None:
+            missing += 1
+            continue
+        published_utc = published.astimezone(UTC)
+        if published_utc > window_end_utc:
+            future += 1
+        elif published_utc < window_start_utc:
+            stale += 1
+        else:
+            fresh.append(item.model_copy(update={"published_at": published_utc}))
+    return FreshnessFilterResult(fresh, stale, missing, future)

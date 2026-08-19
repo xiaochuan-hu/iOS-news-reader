@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from morning_intelligence.domain import (
     Briefing,
+    GitHubTrendingRepo,
     LLMBudgetClaim,
     LLMBudgetClaimResult,
     NewsEvent,
@@ -80,8 +81,56 @@ class SQLiteRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_llm_budget_purpose_claimed
                     ON llm_daily_budget(purpose, claimed_at_utc DESC);
+
+                CREATE TABLE IF NOT EXISTS github_trending_snapshots (
+                    snapshot_date TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    fetched_at_utc TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY(snapshot_date, rank)
+                );
+
                 """
             )
+
+    def save_github_trending_snapshot(
+        self,
+        snapshot_date: date,
+        repositories: list[GitHubTrendingRepo],
+        *,
+        fetched_at_utc: datetime,
+    ) -> None:
+        rows = [
+            (
+                snapshot_date.isoformat(),
+                repository.rank,
+                fetched_at_utc.astimezone(UTC).isoformat(),
+                repository.model_dump_json(),
+            )
+            for repository in repositories
+        ]
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM github_trending_snapshots WHERE snapshot_date = ?",
+                (snapshot_date.isoformat(),),
+            )
+            connection.executemany(
+                "INSERT INTO github_trending_snapshots"
+                "(snapshot_date, rank, fetched_at_utc, payload) "
+                "VALUES (?, ?, ?, ?)",
+                rows,
+            )
+
+    def get_github_trending_snapshot(
+        self, snapshot_date: date
+    ) -> list[GitHubTrendingRepo]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM github_trending_snapshots "
+                "WHERE snapshot_date = ? ORDER BY rank",
+                (snapshot_date.isoformat(),),
+            ).fetchall()
+        return [GitHubTrendingRepo.model_validate_json(row["payload"]) for row in rows]
 
     def claim_llm_budget(
         self,
@@ -183,7 +232,7 @@ class SQLiteRepository:
             (
                 item.id,
                 item.canonical_url,
-                item.published_at.isoformat(),
+                item.published_at.isoformat() if item.published_at else "",
                 item.model_dump_json(),
                 now,
             )

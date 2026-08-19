@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from morning_intelligence.api import briefings_router, health_router
 from morning_intelligence.config import Settings, get_settings
 from morning_intelligence.llm import OpenAICompatibleProvider
+from morning_intelligence.providers import GitHubTrendingProvider
 from morning_intelligence.scheduler import refresh_loop
 from morning_intelligence.services import CollectorService, MorningBriefingService
 from morning_intelligence.sources import build_sources
@@ -47,6 +48,9 @@ def build_service(settings: Settings) -> MorningBriefingService:
         repository=repository,
         collector=collector,
         llm_provider=provider,
+        github_provider=GitHubTrendingProvider(
+            timeout_seconds=settings.morning_auxiliary_timeout_seconds
+        ),
     )
 
 

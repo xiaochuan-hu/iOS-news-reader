@@ -1,6 +1,8 @@
 # Morning Intelligence Harness
 
-A single-process FastAPI service that turns RSS and Hacker News into one grounded Chinese morning briefing. The iPhone triggers generation at its current local 05:00; Railway persists one fail-closed LLM allowance and the finished briefing in SQLite.
+A single-process FastAPI service that turns strictly fresh news and GitHub Trending Today into one
+grounded Chinese morning briefing. The iPhone triggers generation at its current local 05:00;
+Railway persists one fail-closed LLM allowance and the finished briefing in SQLite.
 
 The alarm never starts research or an LLM request. It only reads `GET /v1/briefings/latest/text` from SQLite. Generation is a separate authenticated `POST /v1/briefings/daily-refresh` automation.
 
@@ -8,11 +10,16 @@ The alarm never starts research or an LLM request. It only reads `GET /v1/briefi
 
 - RSS/Atom and Hacker News source adapters behind one async protocol.
 - Per-source timeout and partial-failure isolation.
+- An authoritative inclusive rolling 24-hour publication window after collection.
+- Expanded verified AI, technology, embodied-AI, and robotics feeds configured in YAML.
+- GitHub's official global Trending Today Top 10, persisted and spoken in page order with
+  deterministic completeness fallback.
 - Canonical URL and normalized-title deduplication.
 - Cross-source fuzzy title clustering into `NewsEvent`.
 - Configurable deterministic ranking plus a diversity-aware editorial selection layer.
 - Separate global importance and personal relevance, with soft category targets and no filler quota.
-- One OpenAI-compatible combined editorial call producing event intelligence and spoken text.
+- One OpenAI-compatible combined editorial call producing event intelligence, news prose, and
+  grounded GitHub summaries; Python adds date and guarantees all ten repositories.
 - Validated Chinese event intelligence: summary, why it matters, watch next, key facts and confidence.
 - Deterministic Chinese fallback when no API key is set or the LLM fails.
 - SQLite persistence for items, events, briefings, pipeline runs and the daily LLM budget.
@@ -21,7 +28,10 @@ The alarm never starts research or an LLM request. It only reads `GET /v1/briefi
 - FastAPI JSON/text contracts, bearer/query-token auth and Docker deployment.
 - Unit, integration, failure and sixteen-case offline evaluation suite.
 
-Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md), [docs/reference-audit.md](docs/reference-audit.md), [docs/decisions/001-build-vs-reuse.md](docs/decisions/001-build-vs-reuse.md), and [docs/decisions/003-local-daily-single-llm.md](docs/decisions/003-local-daily-single-llm.md).
+Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md),
+[docs/reference-audit.md](docs/reference-audit.md), and
+[ADR 004](docs/decisions/004-fresh-ai-github-briefing.md).
+V4 feed checks are recorded in [docs/source-verification-v4.md](docs/source-verification-v4.md).
 
 ## Local development
 
@@ -109,7 +119,7 @@ Follow [docs/ios-shortcut-setup.md](docs/ios-shortcut-setup.md). The final flow 
 
 ```text
 iPhone local 05:00 -> POST daily-refresh -> SQLite
-Alarm Is Stopped -> time guard 05:00–08:59 -> cached GET -> Speak Text
+Alarm Is Stopped -> cached GET -> current-location weather on iPhone -> combine -> Speak Text
 ```
 
 ## Operational notes
@@ -124,6 +134,8 @@ Alarm Is Stopped -> time guard 05:00–08:59 -> cached GET -> Speak Text
 ## Current gaps
 
 - No server-side TTS/audio files; iOS Speak Text is the MVP output.
+- No backend weather provider, API, location field, database table, or weather prose. The iPhone
+  obtains current-location weather at actual playback time.
 - No embeddings, Reddit, GitHub releases or deep-dive web research.
 - Fuzzy title clustering is intentionally conservative and language-dependent.
 - The optional legacy scheduler remains in-process; production uses the iPhone client trigger.

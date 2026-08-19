@@ -1,6 +1,6 @@
 # Railway deployment
 
-V3 keeps the existing HTTPS, Bearer auth, Docker image, persistent /app/data volume and SQLite
+V4 keeps the existing HTTPS, Bearer auth, Docker image, persistent /app/data volume and SQLite
 path. It does not add a Docker VOLUME directive and does not require Redis, a queue, or an external
 scheduler.
 
@@ -9,6 +9,7 @@ scheduler.
 ~~~text
 iPhone current-local-time 05:00 automation
   -> POST /v1/briefings/daily-refresh
+  -> strict 24h news + GitHub Trending Today Top10
   -> deterministic editorial selection
   -> persistent atomic allowance
   -> one DeepSeek /chat/completions request
@@ -16,8 +17,8 @@ iPhone current-local-time 05:00 automation
 
 Alarm stopped
   -> GET /v1/briefings/latest/text
-  -> cached text
-  -> Speak Text
+  -> cached backend text
+  -> iPhone current-location weather -> combine -> Speak Text
 ~~~
 
 The iPhone timezone controls 05:00. Railway must not use Europe/London or server time as the V3
@@ -36,8 +37,8 @@ RAILWAY_RUN_UID=0 lets docker-entrypoint.sh give /app/data to UID 10001 before d
 non-root morning user. Do not add VOLUME to the Dockerfile.
 
 Repository initialization only executes CREATE TABLE IF NOT EXISTS and CREATE INDEX IF NOT EXISTS.
-The V3 llm_daily_budget migration is additive; existing briefings remain readable during and after
-deployment.
+The V4 github_trending_snapshots migration is additive; existing briefings and V3 budget rows
+remain readable during and after deployment. No weather table is created.
 
 ## Variables to check manually before deploy
 
@@ -56,6 +57,7 @@ MORNING_DATABASE_PATH=/app/data/morning_intelligence.db
 MORNING_SOURCES_CONFIG=config/sources.yaml
 MORNING_PREFERENCES_CONFIG=config/preferences.yaml
 MORNING_SOURCE_TIMEOUT_SECONDS=8
+MORNING_AUXILIARY_TIMEOUT_SECONDS=8
 MORNING_LLM_TIMEOUT_SECONDS=60
 MORNING_GENERATION_DEADLINE_SECONDS=90
 
@@ -78,6 +80,8 @@ cannot start the legacy scheduler, but both values should still reflect producti
 MORNING_REFRESH_TIMEZONE and MORNING_REFRESH_TIME_LOCAL may remain for legacy server-scheduled
 development, but they have no effect when MORNING_GENERATION_TRIGGER=client.
 
+No Railway weather or location variable is required. Weather is an iPhone Shortcut responsibility.
+
 ## Deployment steps
 
 1. Confirm the target branch and quality gates locally.
@@ -89,7 +93,8 @@ development, but they have no effect when MORNING_GENERATION_TRIGGER=client.
 7. Confirm the previously persisted briefing ID/text still reads successfully.
 8. Inspect startup logs: there must be no DeepSeek request or pipeline generation.
 9. From an authenticated test, POST today's iPhone-formatted local date exactly once.
-10. Confirm logs show llm_calls=1 and one /chat/completions request.
+10. Confirm the window metrics, github_trending_count=10 when GitHub is available, llm_calls=1,
+    and one /chat/completions request.
 11. Repeat the same POST and confirm already_claimed with zero extra calls.
 12. Repeatedly GET latest/text and confirm no extra calls.
 13. Redeploy/restart once and verify the cache and budget claim survive with zero startup calls.

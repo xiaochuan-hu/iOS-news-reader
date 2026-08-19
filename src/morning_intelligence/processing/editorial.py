@@ -6,14 +6,18 @@ from morning_intelligence.domain import EditorialSelection, NewsEvent, SourceTyp
 CATEGORY_ORDER = {
     "ai_llm_agent": 1,
     "technology": 2,
-    "world": 3,
-    "uk": 4,
-    "china": 5,
-    "finance": 6,
+    "embodied_ai": 3,
+    "robotics": 4,
+    "world": 5,
+    "uk": 6,
+    "china": 7,
+    "finance": 8,
 }
 CATEGORY_FAMILIES = {
     "ai_llm_agent": "technology",
     "technology": "technology",
+    "embodied_ai": "robotics",
+    "robotics": "robotics",
 }
 
 NON_EVENT_TITLE_SIGNALS = (

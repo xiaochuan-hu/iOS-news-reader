@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from morning_intelligence.domain import (
     Briefing,
     BriefingSection,
     EnrichedNewsEvent,
     EventIntelligence,
+    GitHubTrendingRepo,
     LLMUsage,
     NewsEvent,
 )
@@ -16,8 +17,10 @@ from morning_intelligence.llm import LLMProvider
 
 from .spoken_script import (
     deterministic_event_intelligence,
-    deterministic_spoken_script,
+    deterministic_news_script,
     estimate_duration_seconds,
+    format_date_intro,
+    format_github_section,
     sanitize_spoken_text,
 )
 
@@ -44,6 +47,10 @@ class BriefingGenerator:
         target_minutes: int,
         language: str,
         characters_per_minute: int = 260,
+        local_date: date | None = None,
+        github_repositories: list[GitHubTrendingRepo] | None = None,
+        news_window_start: datetime | None = None,
+        news_window_end: datetime | None = None,
     ) -> BriefingGenerationResult:
         now = datetime.now(UTC)
         enriched = _fallback_enrichment(events)
@@ -52,51 +59,78 @@ class BriefingGenerator:
         usage = LLMUsage()
         llm_succeeded = False
         fallback_reason = ""
-        spoken_text = ""
+        news_spoken_text = ""
+        github_intelligence = []
+        repositories = github_repositories or []
+        news_target_chars = max(
+            600,
+            target_minutes * characters_per_minute - len(repositories) * 130 - 80,
+        )
 
         if self.provider and events:
             editorial_calls = 1
             started = time.perf_counter()
             try:
-                generated = await self.provider.generate_editorial_briefing(
-                    events,
-                    target_minutes=target_minutes,
-                    language=language,
-                    characters_per_minute=characters_per_minute,
-                )
+                if repositories:
+                    generated = await self.provider.generate_editorial_briefing(
+                        events,
+                        target_minutes=target_minutes,
+                        language=language,
+                        characters_per_minute=characters_per_minute,
+                        github_repositories=repositories,
+                    )
+                else:
+                    # Preserve compatibility with V3 in-process provider implementations.
+                    generated = await self.provider.generate_editorial_briefing(
+                        events,
+                        target_minutes=target_minutes,
+                        language=language,
+                        characters_per_minute=characters_per_minute,
+                    )
                 usage = generated.usage
                 intelligence = {
                     row.event_id: row for row in generated.output.events
                 }
                 enriched = _merge_enrichment(events, intelligence)
-                spoken_text = sanitize_spoken_text(
-                    generated.output.spoken_text,
-                    max_chars=round(target_minutes * characters_per_minute * 1.2),
+                news_spoken_text = sanitize_spoken_text(
+                    generated.output.news_spoken_text,
+                    max_chars=round(news_target_chars * 1.2),
                 )
+                github_intelligence = generated.output.github_repositories
                 if not _is_valid_chinese_script(
-                    spoken_text,
+                    news_spoken_text,
                     language,
-                    minimum_chars=round(
-                        target_minutes * characters_per_minute * 0.8
+                    minimum_chars=max(
+                        300,
+                        round(news_target_chars * 0.7),
                     ),
                 ):
                     raise ValueError("LLM spoken script failed language or length validation")
                 llm_succeeded = True
             except Exception as exc:
-                spoken_text = ""
+                news_spoken_text = ""
                 fallback_reason = f"combined_editorial:{type(exc).__name__}"
             finally:
                 editorial_latency_ms = (time.perf_counter() - started) * 1000
         elif events:
             fallback_reason = "llm_unavailable"
 
-        if not spoken_text:
-            spoken_text = deterministic_spoken_script(
+        if not news_spoken_text:
+            news_spoken_text = deterministic_news_script(
                 events,
-                now=now,
                 target_minutes=target_minutes,
                 characters_per_minute=characters_per_minute,
+                target_characters=news_target_chars,
             )
+
+        effective_date = local_date or now.date()
+        spoken_text = "".join(
+            (
+                format_date_intro(effective_date),
+                news_spoken_text,
+                format_github_section(repositories, github_intelligence),
+            )
+        )
 
         briefing = Briefing(
             generated_at=now,
@@ -110,6 +144,9 @@ class BriefingGenerator:
             event_ids=[event.id for event in events],
             # Preserve the V1 API meaning: this flag denotes stale/cached service fallback.
             is_fallback=False,
+            news_window_start=news_window_start,
+            news_window_end=news_window_end,
+            github_trending_count=len(repositories),
         )
         return BriefingGenerationResult(
             briefing=briefing,

@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from .enums import PipelineStatus, SourceType
 
@@ -21,7 +21,7 @@ class NewsItem(BaseModel):
     url: str
     canonical_url: str = ""
     description: str = ""
-    published_at: datetime
+    published_at: datetime | None
     fetched_at: datetime = Field(default_factory=utc_now)
     author: str | None = None
     language: str | None = None
@@ -62,6 +62,23 @@ class EventIntelligence(BaseModel):
     source_consensus: str = Field(default="", max_length=300)
 
 
+class GitHubTrendingRepo(BaseModel):
+    rank: int = Field(ge=1, le=10)
+    full_name: str
+    url: str
+    description: str = ""
+    language: str | None = None
+    total_stars: int | None = Field(default=None, ge=0)
+    forks: int | None = Field(default=None, ge=0)
+    stars_today: int | None = Field(default=None, ge=0)
+
+
+class GitHubRepositoryIntelligence(BaseModel):
+    repo: str
+    summary_zh: str = Field(default="", max_length=500)
+    why_it_matters: str = Field(default="", max_length=400)
+
+
 class LLMUsage(BaseModel):
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
@@ -72,7 +89,15 @@ class LLMUsage(BaseModel):
 
 class EditorialBriefingOutput(BaseModel):
     events: list[EventIntelligence] = Field(default_factory=list)
-    spoken_text: str = ""
+    news_spoken_text: str = Field(
+        default="", validation_alias=AliasChoices("news_spoken_text", "spoken_text")
+    )
+    github_repositories: list[GitHubRepositoryIntelligence] = Field(default_factory=list)
+
+    @property
+    def spoken_text(self) -> str:
+        """V3-compatible read alias for callers that only know about the news script."""
+        return self.news_spoken_text
 
 
 class EditorialBriefingResult(BaseModel):
@@ -125,6 +150,9 @@ class Briefing(BaseModel):
     sources: list[str] = Field(default_factory=list)
     event_ids: list[str] = Field(default_factory=list)
     is_fallback: bool = False
+    news_window_start: datetime | None = None
+    news_window_end: datetime | None = None
+    github_trending_count: int = 0
 
 
 class PipelineMetrics(BaseModel):
@@ -136,6 +164,15 @@ class PipelineMetrics(BaseModel):
     sources_succeeded: int = 0
     sources_failed: int = 0
     items_fetched: int = 0
+    news_window_start_utc: datetime | None = None
+    news_window_end_utc: datetime | None = None
+    items_rejected_stale: int = 0
+    items_rejected_missing_timestamp: int = 0
+    items_rejected_future: int = 0
+    fresh_items_count: int = 0
+    github_trending_count: int = 0
+    github_snapshot_date: date | None = None
+    github_fetch_success: bool = False
     items_after_dedup: int = 0
     events_clustered: int = 0
     events_shortlisted: int = 0

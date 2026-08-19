@@ -27,3 +27,17 @@ def test_infers_low_value_viral_variants() -> None:
     assert infer_category(["Movie that went viral and won ironic fans"], "world") == (
         "low_value_viral"
     )
+
+
+def test_infers_embodied_ai_before_generic_ai() -> None:
+    assert infer_category(
+        ["New embodied AI vision-language-action system for robot manipulation"],
+        "technology",
+    ) == "embodied_ai"
+
+
+def test_infers_robotics_without_generic_ai_keyword() -> None:
+    assert infer_category(
+        ["Humanoid robotics platform demonstrates autonomous robot navigation"],
+        "technology",
+    ) == "robotics"

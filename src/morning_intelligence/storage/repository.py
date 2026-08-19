@@ -5,6 +5,7 @@ from typing import Protocol
 
 from morning_intelligence.domain import (
     Briefing,
+    GitHubTrendingRepo,
     LLMBudgetClaimResult,
     NewsEvent,
     NewsItem,
@@ -21,6 +22,14 @@ class BriefingRepository(Protocol):
     def get_latest_briefing(self) -> Briefing | None: ...
     def save_pipeline_run(self, metrics: PipelineMetrics) -> None: ...
     def recent_spoken_titles(self, days: int) -> list[str]: ...
+    def save_github_trending_snapshot(
+        self,
+        snapshot_date: date,
+        repositories: list[GitHubTrendingRepo],
+        *,
+        fetched_at_utc: datetime,
+    ) -> None: ...
+    def get_github_trending_snapshot(self, snapshot_date: date) -> list[GitHubTrendingRepo]: ...
     def claim_llm_budget(
         self,
         *,
