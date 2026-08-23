@@ -54,5 +54,8 @@ def test_spoken_section_fills_missing_llm_row_and_keeps_all_top_ten_once() -> No
     positions = [spoken.index(repository.full_name) for repository in repositories]
     assert positions == sorted(positions)
     assert all(spoken.count(repository.full_name) == 1 for repository in repositories)
-    assert "eta/seven，Eta project" in spoken
+    assert "仓库名称 eta/seven" in spoken
+    assert "它做什么：Eta project" in spoken
+    assert "为什么上榜" in spoken
+    assert "主要技术" in spoken
     assert spoken.endswith("以上就是今天 GitHub 热榜前十中值得关注的项目。")

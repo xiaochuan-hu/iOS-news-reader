@@ -48,20 +48,13 @@ class OpenAICompatibleProvider(LLMProvider):
         characters_per_minute: int,
         github_repositories: list[GitHubTrendingRepo] | None = None,
     ) -> EditorialBriefingResult:
-        final_target_chars = target_minutes * characters_per_minute
-        github_budget = len(github_repositories or []) * 130 + 80
-        target_chars = max(600, final_target_chars - github_budget)
-        minimum_chars = round(target_chars * 0.8)
-        maximum_chars = round(target_chars * 1.2)
+        # V5 intentionally accepts these legacy arguments without turning them into
+        # a completion budget. Deep analysis determines the appropriate length.
+        del target_minutes, characters_per_minute
         user = json.dumps(
             {
                 "language": language,
-                "spoken_target": {
-                    "final_target_characters": final_target_chars,
-                    "news_target_characters": target_chars,
-                    "minimum_characters": minimum_chars,
-                    "maximum_characters": maximum_chars,
-                },
+                "briefing_mode": "v5_deep_briefing_no_length_target",
                 "fresh_news_events": _event_payload(events),
                 "github_trending_top10": [
                     repository.model_dump() for repository in (github_repositories or [])
@@ -70,9 +63,10 @@ class OpenAICompatibleProvider(LLMProvider):
                     "events": [
                         {
                             "event_id": "selected event_id",
-                            "summary_zh": "简体中文事实综合",
-                            "why_it_matters": "与事实区分的克制影响解释",
-                            "watch_next": "有证据基础的后续观察点",
+                            "summary_zh": "Event：发生了什么",
+                            "background_zh": "Background：技术、商业或政策背景",
+                            "why_it_matters": "Impact：为什么重要",
+                            "watch_next": "What to watch：未来观察点",
                             "key_facts": ["最多六条输入证据支持的事实"],
                             "confidence": 0.0,
                             "source_consensus": "来源共识或分歧",
@@ -82,8 +76,9 @@ class OpenAICompatibleProvider(LLMProvider):
                     "github_repositories": [
                         {
                             "repo": "输入中的 owner/name",
-                            "summary_zh": "严格依据输入字段的用途概括",
-                            "why_it_matters": "克制说明为什么值得注意",
+                            "summary_zh": "What it does：一句用途概括",
+                            "why_trending": "Why trending：一句上榜原因",
+                            "main_technology": "Main technology：主要语言或技术",
                         }
                     ],
                 },
@@ -134,6 +129,9 @@ def _event_payload(events: list[NewsEvent]) -> list[dict[str, Any]]:
             "source_count": event.source_count,
             "deterministic_score": event.final_score,
             "global_importance": event.global_importance_score,
+            "novelty": event.novelty_score,
+            "technical_importance": event.llm_importance_score,
+            "source_authority": event.source_score,
             "editorial_score": event.editorial_score,
             "evidence": _deduplicated_evidence(event),
         }
@@ -198,6 +196,8 @@ def _parse_github_intelligence(
                     repo=expected[key],
                     summary_zh=_clean_text(raw.get("summary_zh", "")),
                     why_it_matters=_clean_text(raw.get("why_it_matters", "")),
+                    why_trending=_clean_text(raw.get("why_trending", "")),
+                    main_technology=_clean_text(raw.get("main_technology", "")),
                 )
             )
             seen.add(key)
@@ -243,7 +243,13 @@ def parse_event_intelligence(
             continue
         row["event_id"] = event_id
         row["key_facts"] = _clean_key_facts(row.get("key_facts", []))
-        for field in ("summary_zh", "why_it_matters", "watch_next", "source_consensus"):
+        for field in (
+            "summary_zh",
+            "background_zh",
+            "why_it_matters",
+            "watch_next",
+            "source_consensus",
+        ):
             row[field] = _clean_text(row.get(field, ""))
         try:
             result[event_id] = EventIntelligence.model_validate(row)

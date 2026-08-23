@@ -55,6 +55,7 @@ class NewsEvent(BaseModel):
 class EventIntelligence(BaseModel):
     event_id: str
     summary_zh: str = Field(default="", max_length=800)
+    background_zh: str = Field(default="", max_length=1000)
     why_it_matters: str = Field(default="", max_length=600)
     watch_next: str = Field(default="", max_length=400)
     confidence: float | None = Field(default=None, ge=0, le=1)
@@ -77,6 +78,8 @@ class GitHubRepositoryIntelligence(BaseModel):
     repo: str
     summary_zh: str = Field(default="", max_length=500)
     why_it_matters: str = Field(default="", max_length=400)
+    why_trending: str = Field(default="", max_length=300)
+    main_technology: str = Field(default="", max_length=200)
 
 
 class LLMUsage(BaseModel):

@@ -1,6 +1,6 @@
 # Railway deployment
 
-V4 keeps the existing HTTPS, Bearer auth, Docker image, persistent /app/data volume and SQLite
+V5 Deep Briefing keeps the existing HTTPS, Bearer auth, Docker image, persistent /app/data volume and SQLite
 path. It does not add a Docker VOLUME directive and does not require Redis, a queue, or an external
 scheduler.
 
@@ -10,9 +10,9 @@ scheduler.
 iPhone current-local-time 05:00 automation
   -> POST /v1/briefings/daily-refresh
   -> strict 24h news + GitHub Trending Today Top10
-  -> deterministic editorial selection
+  -> deterministic AI Top 5 + general Top 3 editorial selection
   -> persistent atomic allowance
-  -> one DeepSeek /chat/completions request
+  -> one deep-analysis /chat/completions request with no duration compression target
   -> SQLite /app/data/morning_intelligence.db
 
 Alarm stopped

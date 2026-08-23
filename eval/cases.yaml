@@ -58,12 +58,12 @@
       why_it_matters: "这可能影响平台产品设计边界。"
       confidence: 0.9
 
-- id: ai_candidate_balance
+- id: v5_ai_top_five
   type: editorial
   max_events: 6
   minimum_score: 0.40
-  max_category_counts: {ai_llm_agent: 4}
-  required_category_counts: {world: 2}
+  max_category_counts: {ai_llm_agent: 5}
+  required_category_counts: {ai_llm_agent: 5, world: 1}
   candidates:
     - {category: ai_llm_agent, global: 0.78, personal: 1.0}
     - {category: ai_llm_agent, global: 0.77, personal: 1.0}
@@ -101,8 +101,8 @@
     - "不得补充外部知识"
     - "与已发生事实明确区分"
 
-- id: target_minutes_affects_length
-  type: length_control
+- id: v5_no_duration_compression
+  type: no_length_control
   event_count: 4
   short_minutes: 1
   long_minutes: 5

@@ -144,7 +144,7 @@ def _run(case: dict[str, Any]) -> dict[str, Any]:
     elif kind == "grounding_prompt":
         passed = all(phrase in COMBINED_EDITORIAL_SYSTEM_PROMPT for phrase in case["phrases"])
         detail = f"rules={len(case['phrases'])}"
-    elif kind == "length_control":
+    elif kind == "no_length_control":
         events = [_event(f"事件{index}", index) for index in range(case["event_count"])]
         for event in events:
             event.why_it_matters = "它可能影响相关行业接下来的决策"
@@ -155,7 +155,9 @@ def _run(case: dict[str, Any]) -> dict[str, Any]:
         long = deterministic_spoken_script(
             events, now=datetime.now(UTC), target_minutes=case["long_minutes"]
         )
-        passed = len(long) > len(short)
+        passed = long == short and all(
+            phrase in short for phrase in ("背景是", "影响在于", "接下来要观察")
+        )
         detail = f"short={len(short)}, long={len(long)}"
     else:
         raise ValueError(f"unknown eval type: {kind}")

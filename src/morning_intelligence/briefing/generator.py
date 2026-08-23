@@ -62,11 +62,6 @@ class BriefingGenerator:
         news_spoken_text = ""
         github_intelligence = []
         repositories = github_repositories or []
-        news_target_chars = max(
-            600,
-            target_minutes * characters_per_minute - len(repositories) * 130 - 80,
-        )
-
         if self.provider and events:
             editorial_calls = 1
             started = time.perf_counter()
@@ -92,20 +87,10 @@ class BriefingGenerator:
                     row.event_id: row for row in generated.output.events
                 }
                 enriched = _merge_enrichment(events, intelligence)
-                news_spoken_text = sanitize_spoken_text(
-                    generated.output.news_spoken_text,
-                    max_chars=round(news_target_chars * 1.2),
-                )
+                news_spoken_text = sanitize_spoken_text(generated.output.news_spoken_text)
                 github_intelligence = generated.output.github_repositories
-                if not _is_valid_chinese_script(
-                    news_spoken_text,
-                    language,
-                    minimum_chars=max(
-                        300,
-                        round(news_target_chars * 0.7),
-                    ),
-                ):
-                    raise ValueError("LLM spoken script failed language or length validation")
+                if not _is_valid_chinese_script(news_spoken_text, language):
+                    raise ValueError("LLM spoken script failed language validation")
                 llm_succeeded = True
             except Exception as exc:
                 news_spoken_text = ""
@@ -120,7 +105,6 @@ class BriefingGenerator:
                 events,
                 target_minutes=target_minutes,
                 characters_per_minute=characters_per_minute,
-                target_characters=news_target_chars,
             )
 
         effective_date = local_date or now.date()
@@ -179,6 +163,7 @@ def _merge_enrichment(
             merged = EventIntelligence(
                 event_id=event.id,
                 summary_zh=generated.summary_zh or fallback.summary_zh,
+                background_zh=generated.background_zh or fallback.background_zh,
                 why_it_matters=generated.why_it_matters or fallback.why_it_matters,
                 watch_next=generated.watch_next,
                 confidence=generated.confidence,
@@ -204,10 +189,8 @@ def _sections(events: list[EnrichedNewsEvent]) -> list[BriefingSection]:
     ]
 
 
-def _is_valid_chinese_script(
-    text: str, language: str, *, minimum_chars: int
-) -> bool:
-    if len(text) < minimum_chars:
+def _is_valid_chinese_script(text: str, language: str) -> bool:
+    if not text.strip():
         return False
     if not language.lower().startswith("zh"):
         return True

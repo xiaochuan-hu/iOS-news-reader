@@ -19,7 +19,14 @@ CATEGORY_FAMILIES = {
     "embodied_ai": "robotics",
     "robotics": "robotics",
 }
-
+AI_CATEGORIES = frozenset(
+    (
+        "ai_llm_agent",
+        "technology",
+        "embodied_ai",
+        "robotics",
+    )
+)
 NON_EVENT_TITLE_SIGNALS = (
     "ask hn",
     "show hn",
@@ -49,14 +56,34 @@ class EditorialSelector:
         eligible: list[NewsEvent] = []
         for event in events:
             event.editorial_score = self._editorial_score(event)
-            if event.editorial_score >= self.preferences.editorial.minimum_score:
+            if (
+                event.editorial_score >= self.preferences.editorial.minimum_score
+                and not self._is_low_impact_research(event)
+            ):
                 eligible.append(event)
 
-        selected: list[NewsEvent] = []
+        ai_candidates = [event for event in eligible if _is_ai_event(event)]
+        general_candidates = [event for event in eligible if not _is_ai_event(event)]
+
+        # V5's AI ranking is deliberately lexicographic: impact is the first gate,
+        # followed by novelty, technical importance, then source authority.
+        ai_candidates.sort(key=_ai_priority, reverse=True)
+        selected: list[NewsEvent] = ai_candidates[: self.preferences.editorial.ai_top_items]
         category_counts: dict[str, int] = {}
         family_counts: dict[str, int] = {}
-        remaining = list(eligible)
-        while remaining and len(selected) < self.preferences.briefing.max_events:
+        for event in selected:
+            category = _primary_category(event)
+            category_counts[category] = category_counts.get(category, 0) + 1
+            family = _category_family(category)
+            family_counts[family] = family_counts.get(family, 0) + 1
+
+        general_selected = 0
+        remaining = list(general_candidates)
+        while (
+            remaining
+            and general_selected < self.preferences.editorial.general_top_items
+            and len(selected) < self.preferences.briefing.max_events
+        ):
             best = max(
                 remaining,
                 key=lambda event: (
@@ -72,6 +99,7 @@ class EditorialSelector:
                 break
             remaining.remove(best)
             selected.append(best)
+            general_selected += 1
             category = _primary_category(best)
             category_counts[category] = category_counts.get(category, 0) + 1
             family = _category_family(category)
@@ -82,6 +110,14 @@ class EditorialSelector:
             candidate_count=len(events),
             events=selected,
             selected_categories=category_counts,
+        )
+
+    def _is_low_impact_research(self, event: NewsEvent) -> bool:
+        return (
+            _is_ai_event(event)
+            and _is_research_paper(event)
+            and event.global_importance_score
+            < self.preferences.editorial.ai_research_minimum_impact
         )
 
     def _editorial_score(self, event: NewsEvent) -> float:
@@ -134,6 +170,34 @@ class EditorialSelector:
 
 def _primary_category(event: NewsEvent) -> str:
     return event.categories[0] if event.categories else "world"
+
+
+def _is_ai_event(event: NewsEvent) -> bool:
+    return bool(AI_CATEGORIES.intersection(event.categories))
+
+
+def _ai_priority(event: NewsEvent) -> tuple[float, float, float, float, float]:
+    return (
+        event.global_importance_score,
+        event.novelty_score,
+        event.llm_importance_score,
+        event.source_score,
+        event.latest_seen_at.timestamp(),
+    )
+
+
+def _is_research_paper(event: NewsEvent) -> bool:
+    text = " ".join(
+        [
+            event.canonical_title,
+            *(item.url for item in event.items),
+            *(item.source for item in event.items),
+        ]
+    ).casefold()
+    return any(
+        signal in text
+        for signal in ("arxiv.org", "research paper", "new paper", "论文", "paper:")
+    )
 
 
 def _category_family(category: str) -> str:

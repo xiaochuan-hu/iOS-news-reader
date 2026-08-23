@@ -190,6 +190,11 @@ class MorningBriefingService:
                     was_recently_spoken=repeated,
                 )
 
+            candidate_pool_size = max(
+                self.preferences.briefing.max_events,
+                self.preferences.editorial.ai_top_items
+                + self.preferences.editorial.general_top_items,
+            ) * 4
             candidates = sorted(
                 (
                     event
@@ -198,7 +203,7 @@ class MorningBriefingService:
                 ),
                 key=lambda event: event.final_score,
                 reverse=True,
-            )[: self.preferences.briefing.max_events * 4]
+            )[:candidate_pool_size]
             metrics.candidate_events = len(candidates)
             selection = self.editorial_selector.select(candidates)
             selected = selection.events

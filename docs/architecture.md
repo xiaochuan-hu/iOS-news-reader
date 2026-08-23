@@ -1,4 +1,4 @@
-# V4 architecture
+# V5 Deep Briefing architecture
 
 ## Generation and playback
 
@@ -8,10 +8,10 @@ iPhone current-local-time 05:00
   -> freeze pipeline_start_utc and rolling 24-hour window
   -> collect YAML-configured news + fetch official GitHub Trending Today
   -> reject missing, future, and older-than-24h news timestamps
-  -> normalize, deduplicate, cluster, score, and select
+  -> normalize, deduplicate, cluster, score, and select AI Top 5 + general Top 3
   -> SQLite BEGIN IMMEDIATE daily + 20-hour rolling budget claim
   -> at most one combined /chat/completions request
-  -> validate; deterministically fill missing GitHub rows
+  -> validate four-part analysis; deterministically fill missing GitHub rows
   -> Python date intro + news + GitHub ranks 1–10
   -> save complete briefing and audit metrics in SQLite
 
@@ -33,10 +33,15 @@ inclusive filter before normalization. A source cannot bypass freshness by ignor
 Missing or timezone-naive timestamps, timestamps before the lower bound, and timestamps after the
 fixed upper bound are rejected. The window never expands when supply is low.
 
-AI, technology, embodied AI, and robotics discovery uses verified feeds in config/sources.yaml.
-Classification keywords help discovery, but selection still requires deterministic minimum score,
-source quality, recency, confirmation, global importance, novelty, and secondary personal relevance.
-Category targets are soft diversity hints, never filler quotas.
+AI, embodied AI, and robotics candidates must clear the deterministic minimum score. The final
+section contains exactly the highest-ranked five when five qualifying candidates exist. Ranking is
+lexicographic: impact, novelty, technical importance, then source authority. Low-impact research
+papers are excluded below `editorial.ai_research_minimum_impact`; the selector never pads the list
+with weak papers. General news is independently capped at three important stories.
+
+The LLM gives every selected event a complete Event, Background, Impact, and What to watch
+explanation. There is no character or minute budget and no output clipping; completeness controls
+length. The spoken result is a morning analyst briefing rather than a headline reader.
 
 ## GitHub Trending Today
 
@@ -50,7 +55,8 @@ failure may use only the requested local_date's cached rows. With no same-day sn
 section says the ranking is unavailable. It never uses an older snapshot or triggers another LLM
 request.
 
-The combined response may include one summary per input repo. Unknown repos are ignored and the
+The combined response may include one compact purpose, trending reason, and main technology per
+input repo. Unknown repos are ignored and the
 first valid duplicate wins. Python iterates the original ranks 1–10 and uses description, language,
 and stars_today for every missing row. Thus LLM omission cannot remove or reorder a repository.
 

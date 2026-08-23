@@ -56,6 +56,7 @@ async def test_combined_provider_makes_exactly_one_grounded_json_request(make_it
                 {
                     "event_id": "event-1",
                     "summary_zh": "美国多个州正就青少年产品机制起诉 Meta。",
+                    "background_zh": "相关争议集中在面向青少年的产品设计边界。",
                     "why_it_matters": "这可能影响平台面向未成年人的产品边界。",
                     "watch_next": "法院是否提出具体要求。",
                     "key_facts": ["诉讼涉及青少年产品机制"],
@@ -96,12 +97,18 @@ async def test_combined_provider_makes_exactly_one_grounded_json_request(make_it
     assert request["thinking"] == {"type": "disabled"}
     assert "事实边界" in request["messages"][0]["content"]  # type: ignore[index]
     user_payload = json.loads(request["messages"][1]["content"])  # type: ignore[index]
+    assert user_payload["briefing_mode"] == "v5_deep_briefing_no_length_target"
+    assert "spoken_target" not in user_payload
     selected = user_payload["fresh_news_events"]
     assert selected[0]["event_id"] == "event-1"
     assert selected[0]["global_importance"] == 0.85
+    assert selected[0]["novelty"] == 1
+    assert selected[0]["technical_importance"] == 0
+    assert selected[0]["source_authority"] == 0
     assert len(selected[0]["evidence"]) == 2
     assert selected[0]["evidence"][1]["description"] == ""
     assert [row.event_id for row in result.output.events] == ["event-1"]
+    assert result.output.events[0].background_zh.startswith("相关争议")
     assert result.output.spoken_text.startswith("早上好")
     assert result.usage.total_tokens == 303
     assert result.usage.cache_hit_tokens == 41
@@ -291,8 +298,13 @@ def test_combined_prompt_enforces_grounding_and_natural_spoken_output() -> None:
         "严禁利用模型记忆",
         "来源有分歧",
         "why_it_matters",
-        "global_importance",
-        "约九分钟",
+        "影响力 > 新颖性",
+        "没有字符数、分钟数",
+        "Event",
+        "Background",
+        "Impact",
+        "What to watch",
+        "晨间分析师简报",
         "不要机械说第一条",
         "不得输出网址",
     ):

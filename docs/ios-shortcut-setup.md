@@ -1,6 +1,6 @@
 # iPhone Shortcuts setup
 
-V4 keeps generation and playback independent. The phone's current timezone owns local 05:00, and
+V5 Deep Briefing keeps generation and playback independent. The phone's current timezone owns local 05:00, and
 current-location weather is fetched by the phone at actual playback time.
 
 ## A. Morning Brief Refresh at local 05:00

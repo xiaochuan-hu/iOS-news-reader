@@ -1,7 +1,7 @@
 # Morning Intelligence Harness
 
-A single-process FastAPI service that turns strictly fresh news and GitHub Trending Today into one
-grounded Chinese morning briefing. The iPhone triggers generation at its current local 05:00;
+A single-process FastAPI service that turns strictly fresh news and GitHub Trending Today into a
+grounded Chinese V5 Deep Briefing for technically knowledgeable listeners. The iPhone triggers generation at its current local 05:00;
 Railway persists one fail-closed LLM allowance and the finished briefing in SQLite.
 
 The alarm never starts research or an LLM request. It only reads `GET /v1/briefings/latest/text` from SQLite. Generation is a separate authenticated `POST /v1/briefings/daily-refresh` automation.
@@ -111,7 +111,12 @@ Railway neither guesses location nor uses server time for the production trigger
 timezone settings apply only when the explicitly enabled legacy `server` trigger is used.
 `LLM_THINKING_MODE` is optional and provider-neutral: when unset, no `thinking` field is sent.
 
-`briefing.target_minutes` and `briefing.characters_per_minute` define the requested character budget. `editorial.minimum_score` removes weak events before composition; `editorial.category_targets` are diversity hints rather than quotas. It is valid to return fewer than `briefing.min_events` when the remaining news is not meaningful.
+V5 has no character or minute compression target. Each selected story is explained as Event,
+Background, Impact, and What to watch. `editorial.ai_top_items` fixes the qualifying AI, embodied
+AI, and robotics selection at five; `editorial.general_top_items` keeps general news selective,
+and `editorial.ai_research_minimum_impact` excludes low-impact papers. AI ranking is impact,
+novelty, technical importance, then source authority. GitHub remains a compact Top 10 with name,
+purpose, trending reason, and main technology.
 
 ## iPhone setup
 

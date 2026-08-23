@@ -22,7 +22,7 @@ def _event(make_item, index: int, category: str, global_score: float) -> NewsEve
     )
 
 
-def test_ai_candidates_do_not_monopolize_selection(make_item) -> None:
+def test_v5_selects_exactly_five_ai_items_and_fewer_general_items(make_item) -> None:
     preferences = PreferencesConfig.model_validate(
         {
             "briefing": {"min_events": 5, "max_events": 6},
@@ -38,8 +38,40 @@ def test_ai_candidates_do_not_monopolize_selection(make_item) -> None:
     selection = EditorialSelector(preferences).select(candidates)
 
     assert len(selection.events) == 6
-    assert selection.selected_categories["world"] == 2
-    assert selection.selected_categories["ai_llm_agent"] == 4
+    assert selection.selected_categories["world"] == 1
+    assert selection.selected_categories["ai_llm_agent"] == 5
+
+
+def test_v5_ai_ranking_is_impact_then_novelty_technical_authority(make_item) -> None:
+    preferences = PreferencesConfig.model_validate(
+        {"briefing": {"min_events": 1, "max_events": 5}, "editorial": {"minimum_score": 0.1}}
+    )
+    events = [_event(make_item, index, "ai_llm_agent", 0.8) for index in range(6)]
+    for index, event in enumerate(events):
+        event.novelty_score = 0.5
+        event.llm_importance_score = index / 10
+        event.source_score = (6 - index) / 10
+    events[-1].global_importance_score = 0.81
+
+    selection = EditorialSelector(preferences).select(events)
+
+    assert len(selection.events) == 5
+    assert selection.events[0].id == events[-1].id
+    assert selection.events[1].id == events[-2].id
+
+
+def test_v5_excludes_low_impact_ai_research_paper(make_item) -> None:
+    preferences = PreferencesConfig.model_validate(
+        {"briefing": {"min_events": 1, "max_events": 5}, "editorial": {"minimum_score": 0.1}}
+    )
+    paper = _event(make_item, 1, "ai_llm_agent", 0.6)
+    paper.canonical_title = "New paper: incremental benchmark result"
+    consequential = _event(make_item, 2, "ai_llm_agent", 0.8)
+    consequential.canonical_title = "New paper: high-impact robotics safety result"
+
+    selection = EditorialSelector(preferences).select([paper, consequential])
+
+    assert [event.id for event in selection.events] == [consequential.id]
 
 
 def test_soft_target_does_not_insert_trivial_uk_story(make_item) -> None:

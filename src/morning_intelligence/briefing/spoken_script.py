@@ -34,8 +34,7 @@ def deterministic_spoken_script(
     if not events:
         return f"早上好。今天是{date_text}。目前没有足够重要、并且经过验证的新消息。祝你今天顺利。"
 
-    target_chars = target_minutes * characters_per_minute
-    detail_budget = max(90, target_chars // max(1, len(events)))
+    del target_minutes, characters_per_minute
     parts = [f"早上好。今天是{date_text}。今天有{len(events)}件事情值得关注。"]
     previous_category = ""
     for index, event in enumerate(events):
@@ -48,16 +47,17 @@ def deterministic_spoken_script(
         else:
             transition = "同一主题下，"
         sentence = f"{transition}{intelligence.summary_zh.rstrip('。')}。"
-        if detail_budget >= 150 and intelligence.why_it_matters:
-            sentence += f"这件事值得关注，因为{intelligence.why_it_matters.rstrip('。')}。"
-        if detail_budget >= 210 and event.source_count >= 2:
+        sentence += f"背景是，{intelligence.background_zh.rstrip('。')}。"
+        if intelligence.why_it_matters:
+            sentence += f"影响在于，{intelligence.why_it_matters.rstrip('。')}。"
+        if event.source_count >= 2:
             sentence += "目前有多个独立来源报道了这一进展。"
-        if detail_budget >= 250 and intelligence.watch_next:
-            sentence += f"接下来值得观察的是，{intelligence.watch_next.rstrip('。')}。"
+        watch_next = intelligence.watch_next or "是否出现新的可靠进展"
+        sentence += f"接下来要观察，{watch_next.rstrip('。')}。"
         parts.append(sentence)
         previous_category = category
     parts.append("最后，今天值得继续观察的是这些事件是否出现新的可靠进展。祝你今天顺利。")
-    return sanitize_spoken_text("".join(parts), max_chars=round(target_chars * 1.2))
+    return sanitize_spoken_text("".join(parts))
 
 
 def deterministic_news_script(
@@ -69,8 +69,7 @@ def deterministic_news_script(
 ) -> str:
     if not events:
         return "过去二十四小时，目前没有足够重要、并且经过验证的新消息。"
-    target_chars = target_characters or target_minutes * characters_per_minute
-    detail_budget = max(90, target_chars // max(1, len(events)))
+    del target_minutes, characters_per_minute, target_characters
     parts: list[str] = []
     previous_category = ""
     for index, event in enumerate(events):
@@ -82,14 +81,17 @@ def deterministic_news_script(
             transition = CATEGORY_TRANSITIONS.get(category, "另外，")
         else:
             transition = "同一主题下，"
-        sentence = f"{transition}{intelligence.summary_zh.rstrip('。')}。"
-        if detail_budget >= 150 and intelligence.why_it_matters:
-            sentence += f"这件事值得关注，因为{intelligence.why_it_matters.rstrip('。')}。"
-        if detail_budget >= 210 and event.source_count >= 2:
+        sentence = f"{transition}事件本身是，{intelligence.summary_zh.rstrip('。')}。"
+        sentence += f"背景是，{intelligence.background_zh.rstrip('。')}。"
+        if intelligence.why_it_matters:
+            sentence += f"影响在于，{intelligence.why_it_matters.rstrip('。')}。"
+        if event.source_count >= 2:
             sentence += "目前有多个独立来源报道了这一进展。"
+        watch_next = intelligence.watch_next or "是否出现新的可靠进展"
+        sentence += f"接下来要观察，{watch_next.rstrip('。')}。"
         parts.append(sentence)
         previous_category = category
-    return sanitize_spoken_text("".join(parts), max_chars=round(target_chars * 1.2))
+    return sanitize_spoken_text("".join(parts))
 
 
 WEEKDAY_ZH = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
@@ -117,27 +119,23 @@ def format_github_section(
         summary = re.sub(
             re.escape(repository.full_name), "", summary, flags=re.IGNORECASE
         ).strip(" ，。")
-        summary = sanitize_spoken_text(summary, max_chars=80)
+        summary = sanitize_spoken_text(summary, max_chars=100)
         if not summary:
             summary = "项目页面暂未提供可用简介"
+        why_trending = row.why_trending if row and row.why_trending else ""
+        if not why_trending and repository.stars_today is not None:
+            why_trending = f"今天新增约{repository.stars_today}个 Star"
+        if not why_trending:
+            why_trending = "进入 GitHub 今日热榜前十"
+        technology = (
+            row.main_technology if row and row.main_technology else repository.language
+        ) or "项目页面未标明"
         sentence = (
-            f"{rank_names[repository.rank - 1]}名是 {repository.full_name}，"
-            f"{summary.rstrip('。')}。"
+            f"{rank_names[repository.rank - 1]}名，仓库名称 {repository.full_name}。"
+            f"它做什么：{summary.rstrip('。')}。"
+            f"为什么上榜：{sanitize_spoken_text(why_trending, max_chars=60).rstrip('。')}。"
+            f"主要技术：{sanitize_spoken_text(technology, max_chars=40).rstrip('。')}。"
         )
-        if repository.language:
-            sentence += f"主要使用 {repository.language}。"
-        if repository.stars_today is not None:
-            sentence += f"今天新增约{repository.stars_today}个 Star。"
-        if row and row.why_it_matters:
-            why = re.sub(
-                re.escape(repository.full_name),
-                "",
-                row.why_it_matters,
-                flags=re.IGNORECASE,
-            ).strip(" ，。")
-            why = sanitize_spoken_text(why, max_chars=60)
-            if why:
-                sentence += why.rstrip("。") + "。"
         parts.append(sentence)
     parts.append("以上就是今天 GitHub 热榜前十中值得关注的项目。")
     return "".join(parts)
@@ -149,6 +147,9 @@ def deterministic_event_intelligence(event: NewsEvent) -> EventIntelligence:
     return EventIntelligence(
         event_id=event.id,
         summary_zh=summary,
+        background_zh=(
+            "现有来源只提供了事件事实，尚未提供足够的技术或商业背景"
+        ),
         why_it_matters=event.why_it_matters,
         watch_next="",
         key_facts=[summary] if summary else [],
@@ -159,7 +160,7 @@ def deterministic_event_intelligence(event: NewsEvent) -> EventIntelligence:
     )
 
 
-def sanitize_spoken_text(text: str, *, max_chars: int = 1800) -> str:
+def sanitize_spoken_text(text: str, *, max_chars: int | None = None) -> str:
     text = html.unescape(text)
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     text = re.sub(r"\{[^{}]{0,500}\}", " ", text)
@@ -169,7 +170,7 @@ def sanitize_spoken_text(text: str, *, max_chars: int = 1800) -> str:
     text = re.sub(r"[*_`]+", "", text)
     text = re.sub(r"\[[^\]]{1,40}\]|【[^】]{1,40}】", "", text)
     text = re.sub(r"\s+", " ", text).strip()
-    if len(text) <= max_chars:
+    if max_chars is None or len(text) <= max_chars:
         return text.rstrip("，,；; ")
     clipped = text[:max_chars]
     sentence_end = max(clipped.rfind(symbol) for symbol in "。！？")

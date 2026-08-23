@@ -66,7 +66,7 @@ def test_url_only_description_falls_back_to_event_title(make_item) -> None:
     assert deterministic_event_intelligence(event).summary_zh == "AI regulation update"
 
 
-def test_target_minutes_changes_deterministic_detail_level(make_item) -> None:
+def test_v5_ignores_legacy_duration_hint_and_keeps_four_part_depth(make_item) -> None:
     events = []
     for index, category in enumerate(("world", "technology", "china", "finance")):
         item = make_item(
@@ -94,6 +94,6 @@ def test_target_minutes_changes_deterministic_detail_level(make_item) -> None:
         events, now=datetime(2026, 8, 17, tzinfo=UTC), target_minutes=5
     )
 
-    assert len(long) > len(short)
-    assert "值得关注，因为" not in short
-    assert "值得关注，因为" in long
+    assert long == short
+    for phrase in ("背景是", "影响在于", "接下来要观察"):
+        assert phrase in short
