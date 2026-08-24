@@ -42,6 +42,38 @@ def test_v5_selects_exactly_five_ai_items_and_fewer_general_items(make_item) -> 
     assert selection.selected_categories["ai_llm_agent"] == 5
 
 
+def test_v51_allows_five_high_quality_general_stories(make_item) -> None:
+    preferences = PreferencesConfig.model_validate(
+        {
+            "briefing": {"min_events": 1, "max_events": 10},
+            "editorial": {"minimum_score": 0.4, "general_top_items": 5},
+        }
+    )
+    categories = ("world", "uk", "china", "finance", "world", "world")
+    candidates = [
+        _event(make_item, index, category, 0.9 - index * 0.02)
+        for index, category in enumerate(categories)
+    ]
+
+    selection = EditorialSelector(preferences).select(candidates)
+
+    assert len(selection.events) == 5
+
+
+def test_v51_demotes_small_software_churn_below_foundational_ai(make_item) -> None:
+    preferences = PreferencesConfig.model_validate(
+        {"briefing": {"min_events": 1, "max_events": 5}}
+    )
+    widget = _event(make_item, 1, "technology", 0.9)
+    widget.canonical_title = "A small macOS widget is deprecated"
+    infrastructure = _event(make_item, 2, "ai_llm_agent", 0.7)
+    infrastructure.canonical_title = "New AI inference infrastructure cuts serving overhead"
+
+    selection = EditorialSelector(preferences).select([widget, infrastructure])
+
+    assert [event.id for event in selection.events] == [infrastructure.id]
+
+
 def test_v5_ai_ranking_is_impact_then_novelty_technical_authority(make_item) -> None:
     preferences = PreferencesConfig.model_validate(
         {"briefing": {"min_events": 1, "max_events": 5}, "editorial": {"minimum_score": 0.1}}

@@ -87,6 +87,7 @@ async def test_generator_uses_one_combined_editorial_call(make_item) -> None:
     assert result.fallback_used is False
     assert result.usage.total_tokens == 300
     assert result.briefing.spoken_text.startswith("早上好")
+    assert result.briefing.spoken_text.count("早上好") == 1
     assert result.briefing.sections[0].text.startswith("美国多个州")
 
 

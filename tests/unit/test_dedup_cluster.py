@@ -60,3 +60,39 @@ def test_distinct_events_about_same_company_stay_separate(make_item) -> None:
         normalize_item(make_item("OpenAI opens a new office in London", "https://b.example/office")),
     ]
     assert len(cluster_items(items, threshold=76)) == 2
+
+
+def test_robot_competition_reports_with_different_headlines_form_one_event(
+    make_item,
+) -> None:
+    items = [
+        normalize_item(
+            make_item(
+                "World Humanoid Robot Games opens in Beijing with robot football",
+                "https://a.example/robot-games",
+                source="Source A",
+                category="robotics",
+            )
+        ),
+        normalize_item(
+            make_item(
+                "Robots compete in football at the World Humanoid Games",
+                "https://b.example/humanoid-competition",
+                source="Source B",
+                category="embodied_ai",
+            )
+        ),
+        normalize_item(
+            make_item(
+                "Inside the World Humanoid Robot Games competition",
+                "https://c.example/robot-tournament",
+                source="Source C",
+                category="technology",
+            )
+        ),
+    ]
+
+    events = cluster_items(items, threshold=76)
+
+    assert len(events) == 1
+    assert events[0].source_count == 3

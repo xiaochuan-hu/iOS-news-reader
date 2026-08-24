@@ -45,7 +45,7 @@ def deterministic_spoken_script(
         elif category != previous_category:
             transition = CATEGORY_TRANSITIONS.get(category, "另外，")
         else:
-            transition = "同一主题下，"
+            transition = "另外值得关注的是，"
         sentence = f"{transition}{intelligence.summary_zh.rstrip('。')}。"
         sentence += f"背景是，{intelligence.background_zh.rstrip('。')}。"
         if intelligence.why_it_matters:
@@ -80,7 +80,7 @@ def deterministic_news_script(
         elif category != previous_category:
             transition = CATEGORY_TRANSITIONS.get(category, "另外，")
         else:
-            transition = "同一主题下，"
+            transition = "另外值得关注的是，"
         sentence = f"{transition}事件本身是，{intelligence.summary_zh.rstrip('。')}。"
         sentence += f"背景是，{intelligence.background_zh.rstrip('。')}。"
         if intelligence.why_it_matters:
@@ -119,7 +119,7 @@ def format_github_section(
         summary = re.sub(
             re.escape(repository.full_name), "", summary, flags=re.IGNORECASE
         ).strip(" ，。")
-        summary = sanitize_spoken_text(summary, max_chars=100)
+        summary = sanitize_spoken_text(summary, max_chars=28)
         if not summary:
             summary = "项目页面暂未提供可用简介"
         why_trending = row.why_trending if row and row.why_trending else ""
@@ -127,14 +127,18 @@ def format_github_section(
             why_trending = f"今天新增约{repository.stars_today}个 Star"
         if not why_trending:
             why_trending = "进入 GitHub 今日热榜前十"
+        developer_value = row.why_it_matters if row and row.why_it_matters else ""
+        if not developer_value:
+            developer_value = "开发者可据此评估一个新的工具或技术选项"
         technology = (
             row.main_technology if row and row.main_technology else repository.language
         ) or "项目页面未标明"
         sentence = (
-            f"{rank_names[repository.rank - 1]}名，仓库名称 {repository.full_name}。"
-            f"它做什么：{summary.rstrip('。')}。"
-            f"为什么上榜：{sanitize_spoken_text(why_trending, max_chars=60).rstrip('。')}。"
-            f"主要技术：{sanitize_spoken_text(technology, max_chars=40).rstrip('。')}。"
+            f"{rank_names[repository.rank - 1]}名，{repository.full_name}。"
+            f"它是{summary.rstrip('。')}；"
+            f"今天走红是因为{sanitize_spoken_text(why_trending, max_chars=22).rstrip('。')}；"
+            f"对开发者而言，{sanitize_spoken_text(developer_value, max_chars=24).rstrip('。')}；"
+            f"技术方向是{sanitize_spoken_text(technology, max_chars=16).rstrip('。')}。"
         )
         parts.append(sentence)
     parts.append("以上就是今天 GitHub 热榜前十中值得关注的项目。")
@@ -177,6 +181,17 @@ def sanitize_spoken_text(text: str, *, max_chars: int | None = None) -> str:
     if sentence_end >= round(max_chars * 0.75):
         clipped = clipped[: sentence_end + 1]
     return clipped.rstrip("，,；; ")
+
+
+def remove_redundant_llm_intro(text: str) -> str:
+    """Keep the deterministic date intro as the briefing's only greeting."""
+    cleaned = re.sub(r"^早上好[。！!，,\s]*", "", text.strip())
+    cleaned = re.sub(
+        r"^今天是[^。！？!?]{0,40}[。！？!?]\s*",
+        "",
+        cleaned,
+    )
+    return cleaned.strip()
 
 
 def estimate_duration_seconds(text: str, *, characters_per_minute: int = 260) -> int:

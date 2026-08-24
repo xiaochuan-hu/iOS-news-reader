@@ -111,12 +111,13 @@ Railway neither guesses location nor uses server time for the production trigger
 timezone settings apply only when the explicitly enabled legacy `server` trigger is used.
 `LLM_THINKING_MODE` is optional and provider-neutral: when unset, no `thinking` field is sent.
 
-V5 has no character or minute compression target. Each selected story is explained as Event,
-Background, Impact, and What to watch. `editorial.ai_top_items` fixes the qualifying AI, embodied
-AI, and robotics selection at five; `editorial.general_top_items` keeps general news selective,
-and `editorial.ai_research_minimum_impact` excludes low-impact papers. AI ranking is impact,
-novelty, technical importance, then source authority. GitHub remains a compact Top 10 with name,
-purpose, trending reason, and main technology.
+V5.1 has no hard character or minute limit. It uses a 10–15 minute soft target, with roughly
+200–300 Chinese characters for an ordinary important event and 300–500 for a major one. Each
+selected story is explained as Event, Background, Impact, and What to watch.
+`editorial.ai_top_items` caps qualifying AI, technology, embodied-AI, and robotics stories at five;
+`editorial.general_top_items` independently allows up to five important general stories.
+Low-impact papers and ordinary software churn are demoted rather than used as filler. GitHub stays
+a compact Top 10 covering purpose, trending reason, developer significance, and technology.
 
 ## iPhone setup
 

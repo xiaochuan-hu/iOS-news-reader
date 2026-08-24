@@ -54,7 +54,13 @@ class OpenAICompatibleProvider(LLMProvider):
         user = json.dumps(
             {
                 "language": language,
-                "briefing_mode": "v5_deep_briefing_no_length_target",
+                "briefing_mode": "v5.1_deep_briefing_quality_upgrade",
+                "soft_length_guidance": {
+                    "whole_briefing_minutes": "10-15",
+                    "ordinary_event_chinese_characters": "200-300",
+                    "major_event_chinese_characters": "300-500",
+                    "hard_limit": False,
+                },
                 "fresh_news_events": _event_payload(events),
                 "github_trending_top10": [
                     repository.model_dump() for repository in (github_repositories or [])
@@ -78,6 +84,7 @@ class OpenAICompatibleProvider(LLMProvider):
                             "repo": "输入中的 owner/name",
                             "summary_zh": "What it does：一句用途概括",
                             "why_trending": "Why trending：一句上榜原因",
+                            "why_it_matters": "Developer significance：一句开发者意义",
                             "main_technology": "Main technology：主要语言或技术",
                         }
                     ],

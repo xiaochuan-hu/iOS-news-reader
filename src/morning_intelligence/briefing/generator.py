@@ -21,6 +21,7 @@ from .spoken_script import (
     estimate_duration_seconds,
     format_date_intro,
     format_github_section,
+    remove_redundant_llm_intro,
     sanitize_spoken_text,
 )
 
@@ -87,7 +88,9 @@ class BriefingGenerator:
                     row.event_id: row for row in generated.output.events
                 }
                 enriched = _merge_enrichment(events, intelligence)
-                news_spoken_text = sanitize_spoken_text(generated.output.news_spoken_text)
+                news_spoken_text = remove_redundant_llm_intro(
+                    sanitize_spoken_text(generated.output.news_spoken_text)
+                )
                 github_intelligence = generated.output.github_repositories
                 if not _is_valid_chinese_script(news_spoken_text, language):
                     raise ValueError("LLM spoken script failed language validation")

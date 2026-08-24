@@ -97,8 +97,14 @@ async def test_combined_provider_makes_exactly_one_grounded_json_request(make_it
     assert request["thinking"] == {"type": "disabled"}
     assert "事实边界" in request["messages"][0]["content"]  # type: ignore[index]
     user_payload = json.loads(request["messages"][1]["content"])  # type: ignore[index]
-    assert user_payload["briefing_mode"] == "v5_deep_briefing_no_length_target"
+    assert user_payload["briefing_mode"] == "v5.1_deep_briefing_quality_upgrade"
     assert "spoken_target" not in user_payload
+    assert user_payload["soft_length_guidance"] == {
+        "whole_briefing_minutes": "10-15",
+        "ordinary_event_chinese_characters": "200-300",
+        "major_event_chinese_characters": "300-500",
+        "hard_limit": False,
+    }
     selected = user_payload["fresh_news_events"]
     assert selected[0]["event_id"] == "event-1"
     assert selected[0]["global_importance"] == 0.85
@@ -298,13 +304,17 @@ def test_combined_prompt_enforces_grounding_and_natural_spoken_output() -> None:
         "严禁利用模型记忆",
         "来源有分歧",
         "why_it_matters",
-        "影响力 > 新颖性",
-        "没有字符数、分钟数",
-        "Event",
-        "Background",
-        "Impact",
-        "What to watch",
-        "晨间分析师简报",
+        "【发生了什么】",
+        "【背景】",
+        "【为什么重要】",
+        "【接下来观察】",
+        "二百到三百个中文字符",
+        "十到十五分钟",
+        "不得直接输出英文新闻标题",
+        "Claude Code",
+        "不得生成“早上好”",
+        "同一主题下",
+        "对开发者有什么意义",
         "不要机械说第一条",
         "不得输出网址",
     ):

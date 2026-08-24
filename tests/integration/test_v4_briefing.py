@@ -165,8 +165,8 @@ async def test_complete_v4_pipeline_is_fresh_one_call_ordered_and_weather_free(
     positions = [spoken.index(f"owner/repo-{rank:02d}") for rank in range(1, 11)]
     assert positions == sorted(positions)
     assert all(spoken.count(f"owner/repo-{rank:02d}") == 1 for rank in range(1, 11))
-    assert "仓库名称 owner/repo-07" in spoken
-    assert "它做什么：Repository 7 description" in spoken
+    assert "第七名，owner/repo-07" in spoken
+    assert "它是Repository 7 description" in spoken
     assert spoken.endswith("以上就是今天 GitHub 热榜前十中值得关注的项目。")
     assert "天气" not in spoken
 

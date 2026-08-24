@@ -1,4 +1,4 @@
-# V5 Deep Briefing architecture
+# V5.1 Deep Briefing architecture
 
 ## Generation and playback
 
@@ -8,7 +8,7 @@ iPhone current-local-time 05:00
   -> freeze pipeline_start_utc and rolling 24-hour window
   -> collect YAML-configured news + fetch official GitHub Trending Today
   -> reject missing, future, and older-than-24h news timestamps
-  -> normalize, deduplicate, cluster, score, and select AI Top 5 + general Top 3
+  -> normalize, deduplicate, cluster, score, and select AI Top 5 + general Top 5
   -> SQLite BEGIN IMMEDIATE daily + 20-hour rolling budget claim
   -> at most one combined /chat/completions request
   -> validate four-part analysis; deterministically fill missing GitHub rows
@@ -36,12 +36,14 @@ fixed upper bound are rejected. The window never expands when supply is low.
 AI, embodied AI, and robotics candidates must clear the deterministic minimum score. The final
 section contains exactly the highest-ranked five when five qualifying candidates exist. Ranking is
 lexicographic: impact, novelty, technical importance, then source authority. Low-impact research
-papers are excluded below `editorial.ai_research_minimum_impact`; the selector never pads the list
-with weak papers. General news is independently capped at three important stories.
+papers are excluded below `editorial.ai_research_minimum_impact`; ordinary software churn is
+demoted, and the selector never pads the list with weak stories. General news is independently
+capped at five important stories.
 
 The LLM gives every selected event a complete Event, Background, Impact, and What to watch
-explanation. There is no character or minute budget and no output clipping; completeness controls
-length. The spoken result is a morning analyst briefing rather than a headline reader.
+explanation. A 10–15 minute whole-briefing target and 200–300/300–500 Chinese-character event
+guidance are soft editorial goals, never truncation rules. Completeness controls length. The spoken
+result is a morning analyst briefing rather than a headline reader.
 
 ## GitHub Trending Today
 

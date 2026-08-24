@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from morning_intelligence.briefing.spoken_script import (
     deterministic_event_intelligence,
     deterministic_spoken_script,
+    remove_redundant_llm_intro,
     sanitize_spoken_text,
 )
 from morning_intelligence.domain import NewsEvent
@@ -33,6 +34,12 @@ def test_spoken_script_is_plain_text_and_does_not_read_urls(make_item) -> None:
 def test_no_news_does_not_invent_filler() -> None:
     script = deterministic_spoken_script([], now=datetime(2026, 8, 17, tzinfo=UTC))
     assert "没有足够重要" in script
+
+
+def test_llm_greeting_and_date_are_removed_before_deterministic_intro() -> None:
+    text = "早上好。今天是2026年8月24日，星期一。第一件事需要深入分析。"
+
+    assert remove_redundant_llm_intro(text) == "第一件事需要深入分析。"
 
 
 def test_sanitizer_removes_markdown_and_citations() -> None:
@@ -95,5 +102,6 @@ def test_v5_ignores_legacy_duration_hint_and_keeps_four_part_depth(make_item) ->
     )
 
     assert long == short
+    assert "同一主题下" not in short
     for phrase in ("背景是", "影响在于", "接下来要观察"):
         assert phrase in short

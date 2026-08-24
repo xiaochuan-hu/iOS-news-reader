@@ -39,7 +39,7 @@ class BriefingConfig(BaseModel):
     # Retained as API/config compatibility hints only. V5 never clips content to them.
     target_minutes: int = Field(default=5, ge=1, le=10)
     min_events: int = Field(default=5, ge=1, le=30)
-    max_events: int = Field(default=8, ge=1, le=30)
+    max_events: int = Field(default=10, ge=1, le=30)
     min_event_score: float = Field(default=0.2, ge=0, le=1)
     characters_per_minute: int = Field(default=260, ge=180, le=360)
 
@@ -65,7 +65,7 @@ class EditorialConfig(BaseModel):
     diversity_bonus: float = Field(default=0.08, ge=0, le=0.5)
     category_overflow_penalty: float = Field(default=0.22, ge=0, le=0.5)
     ai_top_items: int = Field(default=5, ge=1, le=10)
-    general_top_items: int = Field(default=3, ge=0, le=10)
+    general_top_items: int = Field(default=5, ge=0, le=10)
     ai_research_minimum_impact: float = Field(default=0.65, ge=0, le=1)
     category_targets: dict[str, int] = Field(
         default_factory=lambda: {
