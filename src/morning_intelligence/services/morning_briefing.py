@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -13,6 +14,7 @@ from morning_intelligence.config import PreferencesConfig, Settings
 from morning_intelligence.domain import (
     Briefing,
     GitHubTrendingRepo,
+    GitHubTrendingSource,
     NewsItem,
     PipelineMetrics,
     PipelineStatus,
@@ -57,6 +59,13 @@ class FreshnessFilterResult:
     stale_rejected: int
     missing_timestamp_rejected: int
     future_rejected: int
+
+
+@dataclass(frozen=True)
+class GitHubTrendingSelection:
+    repositories: list[GitHubTrendingRepo]
+    source: GitHubTrendingSource
+    snapshot_date: date | None
 
 
 class MorningBriefingService:
@@ -124,6 +133,9 @@ class MorningBriefingService:
         metrics = PipelineMetrics(sources_requested=len(self.collector.sources))
         started = time.perf_counter()
         selected = []
+        github_selection = GitHubTrendingSelection(
+            [], GitHubTrendingSource.UNAVAILABLE, None
+        )
         claim_id = ""
         try:
             if now_utc.tzinfo is None:
@@ -147,7 +159,7 @@ class MorningBriefingService:
                     with contextlib.suppress(asyncio.CancelledError):
                         await github_task
                 raise
-            github_repositories = await self._github_repositories(
+            github_selection = await self._github_repositories(
                 github_task, local_date=local_date, now_utc=window_end_utc, metrics=metrics
             )
             metrics.sources_succeeded = sum(o.succeeded for o in collected.outcomes)
@@ -251,7 +263,8 @@ class MorningBriefingService:
                 language=self.preferences.language,
                 characters_per_minute=self.preferences.briefing.characters_per_minute,
                 local_date=local_date,
-                github_repositories=github_repositories,
+                github_repositories=github_selection.repositories,
+                github_source=github_selection.source,
                 news_window_start=window_start_utc,
                 news_window_end=window_end_utc,
             )
@@ -313,9 +326,8 @@ class MorningBriefingService:
                         language=self.preferences.language,
                         characters_per_minute=self.preferences.briefing.characters_per_minute,
                         local_date=local_date,
-                        github_repositories=(
-                            self.repository.get_github_trending_snapshot(local_date)
-                        ),
+                        github_repositories=github_selection.repositories,
+                        github_source=github_selection.source,
                         news_window_start=metrics.news_window_start_utc,
                         news_window_end=metrics.news_window_end_utc,
                     )
@@ -380,22 +392,87 @@ class MorningBriefingService:
         local_date: date,
         now_utc: datetime,
         metrics: PipelineMetrics,
-    ) -> list[GitHubTrendingRepo]:
-        repositories: list[GitHubTrendingRepo] = []
+    ) -> GitHubTrendingSelection:
+        live_repositories: list[GitHubTrendingRepo] = []
+        live_error = ""
         if task is not None:
             try:
-                repositories = await task
-                self.repository.save_github_trending_snapshot(
-                    local_date, repositories, fetched_at_utc=now_utc
-                )
-                metrics.github_fetch_success = True
+                live_repositories = await task
+                metrics.github_fetch_success = bool(live_repositories)
             except Exception as exc:
-                metrics.errors.append(f"github:{type(exc).__name__}: {exc}"[:500])
-        if not repositories:
-            repositories = self.repository.get_github_trending_snapshot(local_date)
-        metrics.github_trending_count = len(repositories)
-        metrics.github_snapshot_date = local_date if repositories else None
-        return repositories
+                live_error = f"github:{type(exc).__name__}: {exc}"[:500]
+
+        if _is_complete_github_snapshot(live_repositories):
+            self.repository.save_github_trending_snapshot(
+                local_date, live_repositories, fetched_at_utc=now_utc
+            )
+            selection = GitHubTrendingSelection(
+                live_repositories, GitHubTrendingSource.LIVE_FULL, local_date
+            )
+        elif len(live_repositories) >= 5:
+            selection = GitHubTrendingSelection(
+                live_repositories, GitHubTrendingSource.LIVE_PARTIAL, local_date
+            )
+        else:
+            cached = self._recent_complete_github_snapshot(local_date)
+            if cached is not None:
+                snapshot_date, repositories = cached
+                selection = GitHubTrendingSelection(
+                    repositories,
+                    GitHubTrendingSource.CACHED_FALLBACK,
+                    snapshot_date,
+                )
+            elif live_repositories:
+                selection = GitHubTrendingSelection(
+                    live_repositories, GitHubTrendingSource.LIVE_PARTIAL, local_date
+                )
+            else:
+                selection = GitHubTrendingSelection(
+                    [], GitHubTrendingSource.UNAVAILABLE, None
+                )
+
+        if selection.source == GitHubTrendingSource.UNAVAILABLE:
+            if not live_error and task is not None:
+                live_error = "github: no valid repositories parsed"
+            if live_error:
+                metrics.errors.append(live_error)
+        elif live_error:
+            logger.warning("github_trending live_fetch_error=%s", live_error)
+
+        metrics.github_trending_count = len(selection.repositories)
+        metrics.github_snapshot_date = selection.snapshot_date
+        logger.info(
+            "github_trending source=%s live_count=%d included_count=%d "
+            "snapshot_date=%s fetch_success=%s",
+            selection.source,
+            len(live_repositories),
+            metrics.github_trending_count,
+            selection.snapshot_date.isoformat() if selection.snapshot_date else "none",
+            metrics.github_fetch_success,
+        )
+        return selection
+
+    def _recent_complete_github_snapshot(
+        self, local_date: date
+    ) -> tuple[date, list[GitHubTrendingRepo]] | None:
+        for days_ago in range(3):
+            snapshot_date = local_date - timedelta(days=days_ago)
+            repositories = self.repository.get_github_trending_snapshot(snapshot_date)
+            if _is_complete_github_snapshot(repositories):
+                return snapshot_date, repositories
+        return None
+
+
+def _is_complete_github_snapshot(repositories: list[GitHubTrendingRepo]) -> bool:
+    if len(repositories) != 10:
+        return False
+    ranks = {repository.rank for repository in repositories}
+    identities = {
+        repository.full_name.casefold()
+        for repository in repositories
+        if re.fullmatch(r"[^/\s]+/[^/\s]+", repository.full_name)
+    }
+    return ranks == set(range(1, 11)) and len(identities) == 10
 
 
 def filter_fresh_news_items(

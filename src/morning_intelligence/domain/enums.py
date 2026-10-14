@@ -11,3 +11,10 @@ class PipelineStatus(StrEnum):
     SUCCEEDED = "succeeded"
     PARTIAL = "partial"
     FAILED = "failed"
+
+
+class GitHubTrendingSource(StrEnum):
+    LIVE_FULL = "live_full"
+    LIVE_PARTIAL = "live_partial"
+    CACHED_FALLBACK = "cached_fallback"
+    UNAVAILABLE = "unavailable"

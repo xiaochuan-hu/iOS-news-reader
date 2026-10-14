@@ -1,4 +1,4 @@
-from .enums import PipelineStatus, SourceType
+from .enums import GitHubTrendingSource, PipelineStatus, SourceType
 from .models import (
     Briefing,
     BriefingSection,
@@ -26,6 +26,7 @@ __all__ = [
     "EnrichedNewsEvent",
     "EventIntelligence",
     "GitHubRepositoryIntelligence",
+    "GitHubTrendingSource",
     "GitHubTrendingRepo",
     "LLMBudgetClaim",
     "LLMBudgetClaimResult",

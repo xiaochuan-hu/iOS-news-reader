@@ -12,14 +12,14 @@ The alarm never starts research or an LLM request. It only reads `GET /v1/briefi
 - Per-source timeout and partial-failure isolation.
 - An authoritative inclusive rolling 24-hour publication window after collection.
 - Expanded verified AI, technology, embodied-AI, and robotics feeds configured in YAML.
-- GitHub's official global Trending Today Top 10, persisted and spoken in page order with
-  deterministic completeness fallback.
+- GitHub's official global Trending Today list, spoken in page order with a recent complete-snapshot
+  fallback when the live list is too incomplete.
 - Canonical URL and normalized-title deduplication.
 - Cross-source fuzzy title clustering into `NewsEvent`.
 - Configurable deterministic ranking plus a diversity-aware editorial selection layer.
 - Separate global importance and personal relevance, with soft category targets and no filler quota.
 - One OpenAI-compatible combined editorial call producing event intelligence, news prose, and
-  grounded GitHub summaries; Python adds date and guarantees all ten repositories.
+  grounded GitHub summaries; Python adds the date and preserves every available repository.
 - Validated Chinese event intelligence: summary, why it matters, watch next, key facts and confidence.
 - Deterministic Chinese fallback when no API key is set or the LLM fails.
 - SQLite persistence for items, events, briefings, pipeline runs and the daily LLM budget.

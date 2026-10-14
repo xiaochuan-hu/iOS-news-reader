@@ -48,14 +48,16 @@ result is a morning analyst briefing rather than a headline reader.
 ## GitHub Trending Today
 
 GitHubTrendingProvider fetches `https://github.com/trending?since=daily` with no language filter.
-The standard-library HTML parser preserves page order and returns the first ten valid repository
-articles. GitHub is a Today ranking snapshot; repositories need not have been created in the news
-24-hour window.
+The standard-library HTML parser removes invalid and duplicate rows, preserves page order, and
+returns up to the first ten valid repository articles. GitHub is a Today ranking snapshot;
+repositories need not have been created in the news 24-hour window.
 
-Rows are stored in additive `github_trending_snapshots` keyed by snapshot_date and rank. A fetch
-failure may use only the requested local_date's cached rows. With no same-day snapshot, the spoken
-section says the ranking is unavailable. It never uses an older snapshot or triggers another LLM
-request.
+Rows are stored in additive `github_trending_snapshots` keyed by snapshot_date and rank. Only a
+complete live ranking with ten distinct repositories at ranks 1–10 replaces the daily snapshot.
+Five to nine live rows are used directly. With four or fewer live rows, a fetch failure, or no live
+rows, the service searches the requested local date and previous two local dates for the newest
+complete snapshot. Partial and stale snapshots are rejected, and fallback never triggers another
+LLM request.
 
 The combined response may include one compact purpose, trending reason, and main technology per
 input repo. Unknown repos are ignored and the

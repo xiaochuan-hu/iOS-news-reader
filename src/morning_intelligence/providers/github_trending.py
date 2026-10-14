@@ -74,10 +74,15 @@ def parse_github_trending(html: str) -> list[GitHubTrendingRepo]:
     parser = _TrendingParser()
     parser.feed(html)
     repositories: list[GitHubTrendingRepo] = []
+    seen: set[str] = set()
     for row in parser.rows:
         full_name = re.sub(r"\s+", "", str(row.get("name", ""))).strip("/")
         if not re.fullmatch(r"[^/\s]+/[^/\s]+", full_name):
             continue
+        identity = full_name.casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
         repositories.append(
             GitHubTrendingRepo(
                 rank=len(repositories) + 1,
@@ -130,6 +135,4 @@ class GitHubTrendingProvider:
             response = await client.get(GITHUB_TRENDING_URL)
             response.raise_for_status()
         repositories = parse_github_trending(response.text)
-        if len(repositories) != 10:
-            raise ValueError("GitHub Trending page did not contain ten valid repositories")
         return repositories

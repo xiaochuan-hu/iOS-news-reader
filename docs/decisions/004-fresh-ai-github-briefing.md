@@ -20,8 +20,10 @@ text, and speaks the result.
 - Stale, missing-time, and future-dated news cannot reach ranking or the LLM; low supply shortens
   the briefing instead of widening the window.
 - GitHub Today and news published-within-24h remain distinct freshness concepts.
-- All ten parsed repositories are spoken exactly once and in page order even if the LLM omits rows.
-- GitHub failure is isolated and may use only a same-date SQLite snapshot.
+- Every available parsed repository is spoken exactly once and in page order even if the LLM omits
+  rows.
+- GitHub failure is isolated and may use the newest complete SQLite snapshot from the requested
+  local date or previous two local dates.
 - No weather location crosses the API boundary, no Railway weather variables are needed, and the
   forecast reflects the user's location and time at playback.
 - GET, startup, duplicate POST, fallback, and concurrent-request invariants from ADR 003 remain.

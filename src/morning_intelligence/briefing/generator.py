@@ -10,6 +10,7 @@ from morning_intelligence.domain import (
     EnrichedNewsEvent,
     EventIntelligence,
     GitHubTrendingRepo,
+    GitHubTrendingSource,
     LLMUsage,
     NewsEvent,
 )
@@ -50,6 +51,7 @@ class BriefingGenerator:
         characters_per_minute: int = 260,
         local_date: date | None = None,
         github_repositories: list[GitHubTrendingRepo] | None = None,
+        github_source: GitHubTrendingSource | None = None,
         news_window_start: datetime | None = None,
         news_window_end: datetime | None = None,
     ) -> BriefingGenerationResult:
@@ -115,7 +117,9 @@ class BriefingGenerator:
             (
                 format_date_intro(effective_date),
                 news_spoken_text,
-                format_github_section(repositories, github_intelligence),
+                format_github_section(
+                    repositories, github_intelligence, source=github_source
+                ),
             )
         )
 

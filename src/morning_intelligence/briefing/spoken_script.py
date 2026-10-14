@@ -8,6 +8,7 @@ from morning_intelligence.domain import (
     EventIntelligence,
     GitHubRepositoryIntelligence,
     GitHubTrendingRepo,
+    GitHubTrendingSource,
     NewsEvent,
 )
 
@@ -107,12 +108,45 @@ def format_date_intro(local_date: date) -> str:
 def format_github_section(
     repositories: list[GitHubTrendingRepo],
     intelligence: list[GitHubRepositoryIntelligence] | None = None,
+    *,
+    source: GitHubTrendingSource | None = None,
 ) -> str:
-    if not repositories:
-        return "接下来是 GitHub 今日热榜。GitHub 今日热榜暂时无法获取。"
+    effective_source = source
+    if effective_source is None:
+        if len(repositories) == 10:
+            effective_source = GitHubTrendingSource.LIVE_FULL
+        elif repositories:
+            effective_source = GitHubTrendingSource.LIVE_PARTIAL
+        else:
+            effective_source = GitHubTrendingSource.UNAVAILABLE
+    if not repositories or effective_source == GitHubTrendingSource.UNAVAILABLE:
+        return "接下来是 GitHub 今日热榜。今天 GitHub Trending 的实时榜单未能成功获取。"
     generated = {row.repo.casefold(): row for row in (intelligence or [])}
-    rank_names = ("第一", "第二", "第三", "第四", "第五", "第六", "第七", "第八", "第九", "第十")
-    parts = ["接下来快速看一下 GitHub 今日热榜前十。"]
+    rank_names = (
+        "第一",
+        "第二",
+        "第三",
+        "第四",
+        "第五",
+        "第六",
+        "第七",
+        "第八",
+        "第九",
+        "第十",
+    )
+    if effective_source == GitHubTrendingSource.LIVE_PARTIAL:
+        intro = (
+            "接下来是 GitHub 今日热榜。今天 GitHub Trending 实时榜单只获取到部分项目，"
+            "下面是当前可用的项目。"
+        )
+    elif effective_source == GitHubTrendingSource.CACHED_FALLBACK:
+        intro = (
+            "接下来是 GitHub 今日热榜。今天 GitHub Trending 实时榜单未能完整获取，"
+            "下面使用最近一次成功获取的榜单作为参考。"
+        )
+    else:
+        intro = "接下来快速看一下 GitHub 今日热榜前十。"
+    parts = [intro]
     for repository in sorted(repositories, key=lambda row: row.rank):
         row = generated.get(repository.full_name.casefold())
         summary = row.summary_zh if row and row.summary_zh else repository.description
@@ -141,7 +175,12 @@ def format_github_section(
             f"技术方向是{sanitize_spoken_text(technology, max_chars=16).rstrip('。')}。"
         )
         parts.append(sentence)
-    parts.append("以上就是今天 GitHub 热榜前十中值得关注的项目。")
+    if effective_source == GitHubTrendingSource.LIVE_PARTIAL:
+        parts.append("以上就是今天 GitHub 热榜当前可用的项目。")
+    elif effective_source == GitHubTrendingSource.CACHED_FALLBACK:
+        parts.append("以上就是最近一次可用的 GitHub 热榜前十中值得关注的项目。")
+    else:
+        parts.append("以上就是今天 GitHub 热榜前十中值得关注的项目。")
     return "".join(parts)
 
 
