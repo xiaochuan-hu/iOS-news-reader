@@ -5,6 +5,7 @@ import contextlib
 import logging
 import re
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
@@ -36,6 +37,8 @@ from .collector import CollectorService
 logger = logging.getLogger(__name__)
 
 EDITORIAL_BUDGET_PURPOSE = "morning_editorial"
+GENERATION_DEADLINE_EXCEEDED = "generation_deadline_exceeded"
+REFRESH_CANCELLED = "refresh_cancelled"
 DailyRefreshStatus = Literal[
     "generated",
     "generated_fallback",
@@ -103,13 +106,30 @@ class MorningBriefingService:
             )
 
     async def deadline_daily_refresh(self, local_date: date) -> DailyRefreshResult:
+        refresh_task = asyncio.create_task(self.daily_refresh(local_date))
         try:
             async with asyncio.timeout(self.settings.morning_generation_deadline_seconds):
-                return await self.daily_refresh(local_date)
-        except TimeoutError:
+                return await asyncio.shield(refresh_task)
+        except TimeoutError as exc:
+            refresh_task.cancel(GENERATION_DEADLINE_EXCEEDED)
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await refresh_task
             cached = self.repository.get_latest_briefing()
+            logger.warning(
+                "daily_refresh_deadline local_date=%s reason=%s cached=%s",
+                local_date.isoformat(),
+                GENERATION_DEADLINE_EXCEEDED,
+                cached is not None,
+            )
             if cached is not None:
-                return DailyRefreshResult("cached", local_date, cached, "deadline")
+                return DailyRefreshResult(
+                    "cached", local_date, cached, GENERATION_DEADLINE_EXCEEDED
+                )
+            raise TimeoutError(GENERATION_DEADLINE_EXCEEDED) from exc
+        except asyncio.CancelledError:
+            refresh_task.cancel(REFRESH_CANCELLED)
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await refresh_task
             raise
 
     async def generate(
@@ -132,6 +152,15 @@ class MorningBriefingService:
     ) -> DailyRefreshResult:
         metrics = PipelineMetrics(sources_requested=len(self.collector.sources))
         started = time.perf_counter()
+        stage_timings = {
+            "source_collection_ms": 0.0,
+            "github_ms": 0.0,
+            "freshness_normalize_dedup_ms": 0.0,
+            "clustering_ms": 0.0,
+            "scoring_selection_ms": 0.0,
+            "llm_editorial_ms": 0.0,
+            "persistence_ms": 0.0,
+        }
         selected = []
         github_selection = GitHubTrendingSelection(
             [], GitHubTrendingSource.UNAVAILABLE, None
@@ -145,9 +174,21 @@ class MorningBriefingService:
             metrics.news_window_start_utc = window_start_utc
             metrics.news_window_end_utc = window_end_utc
 
-            collection_task = asyncio.create_task(self.collector.collect(window_start_utc))
+            collection_task = asyncio.create_task(
+                _measure_async_stage(
+                    self.collector.collect(window_start_utc),
+                    stage="source_collection_ms",
+                    timings=stage_timings,
+                )
+            )
             github_task = (
-                asyncio.create_task(self.github_provider.fetch_today())
+                asyncio.create_task(
+                    _measure_async_stage(
+                        self.github_provider.fetch_today(),
+                        stage="github_ms",
+                        timings=stage_timings,
+                    )
+                )
                 if self.github_provider is not None
                 else None
             )
@@ -169,24 +210,34 @@ class MorningBriefingService:
             if collected.all_failed or not collected.outcomes:
                 raise RuntimeError("all configured news sources failed")
 
-            freshness = filter_fresh_news_items(
-                collected.items,
-                window_start_utc=window_start_utc,
-                window_end_utc=window_end_utc,
-            )
-            metrics.items_rejected_stale = freshness.stale_rejected
-            metrics.items_rejected_missing_timestamp = freshness.missing_timestamp_rejected
-            metrics.items_rejected_future = freshness.future_rejected
-            metrics.fresh_items_count = len(freshness.items)
-            normalized = [normalize_item(item) for item in freshness.items]
-            deduplicated = deduplicate_items(normalized)
-            metrics.items_after_dedup = len(deduplicated)
+            stage_started = time.perf_counter()
+            try:
+                freshness = filter_fresh_news_items(
+                    collected.items,
+                    window_start_utc=window_start_utc,
+                    window_end_utc=window_end_utc,
+                )
+                metrics.items_rejected_stale = freshness.stale_rejected
+                metrics.items_rejected_missing_timestamp = freshness.missing_timestamp_rejected
+                metrics.items_rejected_future = freshness.future_rejected
+                metrics.fresh_items_count = len(freshness.items)
+                normalized = [normalize_item(item) for item in freshness.items]
+                deduplicated = deduplicate_items(normalized)
+                metrics.items_after_dedup = len(deduplicated)
+            finally:
+                stage_timings["freshness_normalize_dedup_ms"] = (
+                    time.perf_counter() - stage_started
+                ) * 1000
+
+            stage_started = time.perf_counter()
             events = cluster_items(
                 deduplicated,
                 threshold=self.preferences.processing.fuzzy_title_threshold,
             )
             metrics.events_clustered = len(events)
+            stage_timings["clustering_ms"] = (time.perf_counter() - stage_started) * 1000
 
+            stage_started = time.perf_counter()
             recent_titles = self.repository.recent_spoken_titles(
                 self.preferences.processing.novelty_lookback_days
             )
@@ -222,8 +273,16 @@ class MorningBriefingService:
             metrics.selected_events = len(selected)
             metrics.events_shortlisted = len(selected)
             metrics.selected_categories = selection.selected_categories
+            stage_timings["scoring_selection_ms"] = (
+                time.perf_counter() - stage_started
+            ) * 1000
+
+            persistence_started = time.perf_counter()
             self.repository.save_items(normalized)
             self.repository.save_events(selected)
+            stage_timings["persistence_ms"] += (
+                time.perf_counter() - persistence_started
+            ) * 1000
 
             if self.llm_provider is not None and selected:
                 claim_result = self.repository.claim_llm_budget(
@@ -257,17 +316,23 @@ class MorningBriefingService:
                     local_date.isoformat(),
                 )
 
-            generation = await self.generator.generate(
-                selected,
-                target_minutes=self.preferences.briefing.target_minutes,
-                language=self.preferences.language,
-                characters_per_minute=self.preferences.briefing.characters_per_minute,
-                local_date=local_date,
-                github_repositories=github_selection.repositories,
-                github_source=github_selection.source,
-                news_window_start=window_start_utc,
-                news_window_end=window_end_utc,
-            )
+            stage_started = time.perf_counter()
+            try:
+                generation = await self.generator.generate(
+                    selected,
+                    target_minutes=self.preferences.briefing.target_minutes,
+                    language=self.preferences.language,
+                    characters_per_minute=self.preferences.briefing.characters_per_minute,
+                    local_date=local_date,
+                    github_repositories=github_selection.repositories,
+                    github_source=github_selection.source,
+                    news_window_start=window_start_utc,
+                    news_window_end=window_end_utc,
+                )
+            finally:
+                stage_timings["llm_editorial_ms"] = (
+                    time.perf_counter() - stage_started
+                ) * 1000
             briefing = generation.briefing
             metrics.llm_calls = generation.editorial_calls
             metrics.llm_editorial_calls = generation.editorial_calls
@@ -296,7 +361,11 @@ class MorningBriefingService:
                 )
 
             # INSERT happens only after a complete briefing exists; the prior cache stays readable.
+            persistence_started = time.perf_counter()
             self.repository.save_briefing(briefing)
+            stage_timings["persistence_ms"] += (
+                time.perf_counter() - persistence_started
+            ) * 1000
             metrics.status = (
                 PipelineStatus.PARTIAL if metrics.errors else PipelineStatus.SUCCEEDED
             )
@@ -309,6 +378,34 @@ class MorningBriefingService:
             else:
                 status = "generated"
             return DailyRefreshResult(status, local_date, briefing)
+        except asyncio.CancelledError as exc:
+            cancellation_reason = (
+                str(exc) if str(exc) in {GENERATION_DEADLINE_EXCEEDED, REFRESH_CANCELLED}
+                else REFRESH_CANCELLED
+            )
+            metrics.status = PipelineStatus.FAILED
+            metrics.errors.append(cancellation_reason)
+            metrics.fallback_reason = cancellation_reason
+            if claim_id:
+                try:
+                    self.repository.complete_llm_budget_claim(
+                        claim_id,
+                        success=False,
+                        error=cancellation_reason,
+                        completed_at_utc=datetime.now(UTC),
+                    )
+                except Exception:
+                    logger.exception(
+                        "failed to complete cancelled LLM budget claim claim_id=%s",
+                        claim_id,
+                    )
+            logger.warning(
+                "daily_refresh_cancelled run_id=%s reason=%s claim_consumed=%s",
+                metrics.run_id,
+                cancellation_reason,
+                bool(claim_id),
+            )
+            raise
         except Exception as exc:
             metrics.status = PipelineStatus.FAILED
             metrics.errors.append(f"{type(exc).__name__}: {exc}"[:500])
@@ -331,7 +428,11 @@ class MorningBriefingService:
                         news_window_start=metrics.news_window_start_utc,
                         news_window_end=metrics.news_window_end_utc,
                     )
+                    persistence_started = time.perf_counter()
                     self.repository.save_briefing(fallback.briefing)
+                    stage_timings["persistence_ms"] += (
+                        time.perf_counter() - persistence_started
+                    ) * 1000
                     metrics.fallback_used = True
                     metrics.fallback_reason = f"application:{type(exc).__name__}"
                     return DailyRefreshResult(
@@ -352,6 +453,21 @@ class MorningBriefingService:
             metrics.completed_at = datetime.now(UTC)
             metrics.total_latency_ms = (time.perf_counter() - started) * 1000
             self.repository.save_pipeline_run(metrics)
+            logger.info(
+                "pipeline_stage_timings run_id=%s source_collection_ms=%.1f "
+                "github_ms=%.1f freshness_normalize_dedup_ms=%.1f clustering_ms=%.1f "
+                "scoring_selection_ms=%.1f llm_editorial_ms=%.1f persistence_ms=%.1f "
+                "total_latency_ms=%.1f",
+                metrics.run_id,
+                stage_timings["source_collection_ms"],
+                stage_timings["github_ms"],
+                stage_timings["freshness_normalize_dedup_ms"],
+                stage_timings["clustering_ms"],
+                stage_timings["scoring_selection_ms"],
+                stage_timings["llm_editorial_ms"],
+                stage_timings["persistence_ms"],
+                metrics.total_latency_ms,
+            )
             logger.info(
                 "pipeline_run run_id=%s status=%s sources=%d/%d items=%d events=%d "
                 "candidates=%d selected=%d categories=%s llm_calls=%d "
@@ -384,7 +500,6 @@ class MorningBriefingService:
                 metrics.github_fetch_success,
                 metrics.total_latency_ms,
             )
-
     async def _github_repositories(
         self,
         task: asyncio.Task[list[GitHubTrendingRepo]] | None,
@@ -461,6 +576,19 @@ class MorningBriefingService:
             if _is_complete_github_snapshot(repositories):
                 return snapshot_date, repositories
         return None
+
+
+async def _measure_async_stage[TimedResult](
+    awaitable: Awaitable[TimedResult],
+    *,
+    stage: str,
+    timings: dict[str, float],
+) -> TimedResult:
+    started = time.perf_counter()
+    try:
+        return await awaitable
+    finally:
+        timings[stage] = (time.perf_counter() - started) * 1000
 
 
 def _is_complete_github_snapshot(repositories: list[GitHubTrendingRepo]) -> bool:

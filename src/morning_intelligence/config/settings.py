@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     morning_source_timeout_seconds: float = Field(default=8, gt=0)
     morning_auxiliary_timeout_seconds: float = Field(default=8, gt=0)
     morning_llm_timeout_seconds: float = Field(default=60, gt=0)
-    morning_generation_deadline_seconds: float = Field(default=90, gt=0)
+    morning_generation_deadline_seconds: float = Field(default=180, gt=0)
     morning_generation_trigger: Literal["client", "server"] = "client"
     morning_background_refresh_enabled: bool = False
     morning_manual_generation_enabled: bool = False

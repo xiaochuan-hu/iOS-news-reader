@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from morning_intelligence.config import PreferencesConfig, Settings
@@ -115,17 +118,39 @@ class BlockingProvider(CountingProvider):
         )
 
 
+class SlowCountingProvider(LLMProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+        self.started = asyncio.Event()
+
+    async def generate_editorial_briefing(
+        self,
+        events: list[NewsEvent],
+        *,
+        target_minutes: int,
+        language: str,
+        characters_per_minute: int,
+    ) -> EditorialBriefingResult:
+        del events, target_minutes, language, characters_per_minute
+        self.calls += 1
+        self.started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("slow provider should only exit through cancellation")
+
+
 def _service(
     path,
     provider: LLMProvider | None,
     *,
     failing_source: bool = False,
+    generation_deadline_seconds: float = 180,
 ) -> MorningBriefingService:
     settings = Settings(
         _env_file=None,
         morning_database_path=path,
         morning_background_refresh_enabled=False,
         morning_min_llm_interval_hours=20,
+        morning_generation_deadline_seconds=generation_deadline_seconds,
         llm_model="fixture-model",
     )
     repository = SQLiteRepository(path)
@@ -313,6 +338,113 @@ async def test_old_cache_remains_readable_while_new_generation_is_in_flight(tmp_
     assert service.latest().id != old.id  # type: ignore[union-attr]
 
 
+async def test_deadline_timeout_persists_failed_pipeline_status(tmp_path) -> None:
+    path = tmp_path / "deadline-status.db"
+    provider = SlowCountingProvider()
+    service = _service(path, provider, generation_deadline_seconds=0.1)
+    local_date = datetime.now(UTC).date()
+
+    with pytest.raises(TimeoutError, match="generation_deadline_exceeded"):
+        await service.deadline_daily_refresh(local_date)
+
+    payload = _latest_pipeline_payload(path)
+    assert payload["status"] == "failed"
+    assert payload["status"] != "running"
+    assert payload["fallback_reason"] == "generation_deadline_exceeded"
+    assert "generation_deadline_exceeded" in payload["errors"]
+    assert payload["total_latency_ms"] > 0
+
+
+async def test_timeout_after_budget_claim_cannot_retry_provider(tmp_path) -> None:
+    path = tmp_path / "deadline-budget.db"
+    provider = SlowCountingProvider()
+    service = _service(path, provider, generation_deadline_seconds=0.1)
+    local_date = datetime.now(UTC).date()
+
+    with pytest.raises(TimeoutError, match="generation_deadline_exceeded"):
+        await service.deadline_daily_refresh(local_date)
+    repeated = await service.deadline_daily_refresh(local_date)
+
+    assert repeated.status == "already_claimed"
+    assert provider.calls == 1
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            "SELECT success, error, completed_at_utc FROM llm_daily_budget"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][:2] == (0, "generation_deadline_exceeded")
+    assert rows[0][2] is not None
+
+
+async def test_deadline_returns_prior_cache_without_replacing_it(tmp_path) -> None:
+    path = tmp_path / "deadline-cache.db"
+    provider = SlowCountingProvider()
+    service = _service(path, provider, generation_deadline_seconds=0.1)
+    cached = Briefing(
+        event_count=1,
+        estimated_duration_seconds=20,
+        spoken_text="截止期限前已经存在的完整晨报",
+    )
+    service.repository.save_briefing(cached)
+
+    result = await service.deadline_daily_refresh(datetime.now(UTC).date())
+
+    assert result.status == "cached"
+    assert result.budget_reason == "generation_deadline_exceeded"
+    assert result.briefing is not None
+    assert result.briefing.id == cached.id
+    assert service.latest() is not None
+    assert service.latest().id == cached.id  # type: ignore[union-attr]
+    with sqlite3.connect(path) as connection:
+        briefing_count = connection.execute("SELECT COUNT(*) FROM briefings").fetchone()[0]
+    assert briefing_count == 1
+
+
+async def test_external_cancellation_is_propagated(tmp_path) -> None:
+    path = tmp_path / "external-cancellation.db"
+    provider = SlowCountingProvider()
+    service = _service(path, provider, generation_deadline_seconds=5)
+    task = asyncio.create_task(service.deadline_daily_refresh(datetime.now(UTC).date()))
+    await provider.started.wait()
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    payload = _latest_pipeline_payload(path)
+    assert payload["status"] == "failed"
+    assert payload["fallback_reason"] == "refresh_cancelled"
+
+
+async def test_successful_refresh_logs_stage_timings(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    provider = CountingProvider()
+    service = _service(tmp_path / "stage-timings.db", provider)
+    caplog.set_level(logging.INFO, logger="morning_intelligence.services.morning_briefing")
+
+    result = await service.daily_refresh(datetime.now(UTC).date())
+
+    assert result.status == "generated"
+    assert provider.calls == 1
+    timing_log = next(
+        record.message
+        for record in caplog.records
+        if record.message.startswith("pipeline_stage_timings")
+    )
+    for field in (
+        "source_collection_ms",
+        "github_ms",
+        "freshness_normalize_dedup_ms",
+        "clustering_ms",
+        "scoring_selection_ms",
+        "llm_editorial_ms",
+        "persistence_ms",
+        "total_latency_ms",
+    ):
+        assert f"{field}=" in timing_log
+
+
 async def test_manual_service_entry_cannot_bypass_daily_budget(tmp_path) -> None:
     provider = CountingProvider()
     service = _service(tmp_path / "manual-safe.db", provider)
@@ -321,3 +453,11 @@ async def test_manual_service_entry_cannot_bypass_daily_budget(tmp_path) -> None
     await service.generate(target_minutes=3, incremental_refresh=False, max_age_minutes=1)
 
     assert provider.calls == 1
+
+
+def _latest_pipeline_payload(path) -> dict[str, object]:
+    with sqlite3.connect(path) as connection:
+        payload = connection.execute(
+            "SELECT payload FROM pipeline_runs ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()[0]
+    return json.loads(payload)  # type: ignore[no-any-return]

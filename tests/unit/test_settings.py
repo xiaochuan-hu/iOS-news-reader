@@ -16,7 +16,7 @@ def test_default_daily_refresh_configuration() -> None:
     assert settings.morning_manual_generation_enabled is False
     assert settings.morning_min_llm_interval_hours == 20
     assert settings.morning_llm_timeout_seconds == 60
-    assert settings.morning_generation_deadline_seconds == 90
+    assert settings.morning_generation_deadline_seconds == 180
     assert settings.morning_auxiliary_timeout_seconds == 8
 
 
