@@ -207,3 +207,20 @@ def test_startup_never_generates_even_if_old_background_flag_is_true() -> None:
     with client:
         assert client.get("/health").status_code == 200
     assert service.refresh_calls == 0
+
+
+def test_tts_disabled_leaves_existing_endpoints_unchanged() -> None:
+    client, service = make_client()
+    headers = {"Authorization": "Bearer test-token"}
+    today = datetime.now(UTC).date()
+
+    assert client.get("/v1/briefings/latest", headers=headers).status_code == 200
+    assert client.get("/v1/briefings/latest/text", headers=headers).status_code == 200
+    assert client.post(
+        "/v1/briefings/daily-refresh",
+        headers=headers,
+        json={"local_date": today.isoformat()},
+    ).status_code == 200
+    assert client.get("/v1/briefings/latest/audio", headers=headers).status_code == 503
+    assert client.get("/v1/briefings/latest/audio-url", headers=headers).status_code == 503
+    assert service.refresh_calls == 1

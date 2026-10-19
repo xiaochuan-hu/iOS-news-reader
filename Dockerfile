@@ -3,7 +3,7 @@ FROM python:3.12-slim AS runtime
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends gosu \
+    && apt-get install --yes --no-install-recommends ffmpeg gosu \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

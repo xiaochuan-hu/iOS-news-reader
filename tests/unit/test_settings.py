@@ -18,6 +18,14 @@ def test_default_daily_refresh_configuration() -> None:
     assert settings.morning_llm_timeout_seconds == 60
     assert settings.morning_generation_deadline_seconds == 180
     assert settings.morning_auxiliary_timeout_seconds == 8
+    assert settings.morning_tts_enabled is False
+    assert settings.morning_tts_provider == "azure"
+    assert settings.morning_tts_voice == "zh-CN-YunxiNeural"
+    assert settings.morning_tts_style == "newscast"
+    assert settings.morning_tts_rate == "0%"
+    assert settings.morning_tts_timeout_seconds == 45
+    assert settings.morning_audio_retention_days == 7
+    assert settings.morning_media_url_ttl_seconds == 14_400
 
 
 @pytest.mark.parametrize("timezone", ["Europe/London", "Asia/Singapore", "UTC"])
@@ -56,3 +64,25 @@ def test_thinking_mode_parsing(mode: str | None) -> None:
 def test_invalid_thinking_mode_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, llm_thinking_mode="automatic")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("azure_speech_region", "https://not-a-region"),
+        ("morning_tts_voice", "voice<unsafe>"),
+        ("morning_tts_style", "style with spaces"),
+        ("morning_tts_rate", "fast"),
+    ],
+)
+def test_invalid_tts_ssml_configuration_is_rejected(field: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})
+
+
+def test_media_signing_key_requires_adequate_length_when_configured() -> None:
+    with pytest.raises(ValidationError, match="at least 32 bytes"):
+        Settings(_env_file=None, morning_media_signing_key="too-short")
+
+    key = "k" * 32
+    assert Settings(_env_file=None, morning_media_signing_key=key).morning_media_signing_key == key

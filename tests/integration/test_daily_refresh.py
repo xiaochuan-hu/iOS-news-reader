@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import sqlite3
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -25,6 +27,7 @@ from morning_intelligence.llm import LLMProvider
 from morning_intelligence.main import create_app
 from morning_intelligence.services import CollectorService, MorningBriefingService
 from morning_intelligence.storage import SQLiteRepository
+from morning_intelligence.tts import AudioService
 
 
 class DailySource:
@@ -138,12 +141,35 @@ class SlowCountingProvider(LLMProvider):
         raise AssertionError("slow provider should only exit through cancellation")
 
 
+class FailingTTSProvider:
+    name = "failing-fake"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def cache_identity(self) -> Mapping[str, str]:
+        return {
+            "provider": self.name,
+            "voice": "test",
+            "style": "newscast",
+            "rate": "0%",
+            "output_format": "test-mp3-v1",
+        }
+
+    async def synthesize(self, text: str, output_path: Path) -> None:
+        del text, output_path
+        self.calls += 1
+        raise RuntimeError("simulated TTS outage")
+
+
 def _service(
     path,
     provider: LLMProvider | None,
     *,
     failing_source: bool = False,
     generation_deadline_seconds: float = 180,
+    audio_service: AudioService | None = None,
 ) -> MorningBriefingService:
     settings = Settings(
         _env_file=None,
@@ -162,6 +188,7 @@ def _service(
         repository=repository,
         collector=CollectorService([source], timeout_seconds=1),  # type: ignore[list-item]
         llm_provider=provider,
+        audio_service=audio_service,
     )
 
 
@@ -453,6 +480,44 @@ async def test_manual_service_entry_cannot_bypass_daily_budget(tmp_path) -> None
     await service.generate(target_minutes=3, incremental_refresh=False, max_age_minutes=1)
 
     assert provider.calls == 1
+
+
+async def test_background_tts_failure_does_not_change_refresh_or_llm_budget(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    llm_provider = CountingProvider()
+    tts_provider = FailingTTSProvider()
+    audio_service = AudioService(
+        provider=tts_provider,
+        audio_directory=tmp_path / "audio",
+    )
+    service = _service(
+        tmp_path / "tts-isolation.db",
+        llm_provider,
+        audio_service=audio_service,
+    )
+    caplog.set_level(logging.WARNING)
+    local_date = datetime.now(UTC).date()
+
+    result = await service.daily_refresh(local_date)
+    await asyncio.sleep(0)
+    generated_payload = _latest_pipeline_payload(service.settings.morning_database_path)
+    repeated = await service.daily_refresh(local_date)
+
+    assert result.status == "generated"
+    assert result.briefing is not None
+    assert service.latest() is not None
+    assert repeated.status == "already_claimed"
+    assert llm_provider.calls == 1
+    assert tts_provider.calls == 1
+    assert generated_payload["status"] == "succeeded"
+    assert generated_payload["llm_calls"] == 1
+    with sqlite3.connect(service.settings.morning_database_path) as connection:
+        budget_rows = connection.execute(
+            "SELECT purpose, success FROM llm_daily_budget"
+        ).fetchall()
+    assert budget_rows == [("morning_editorial", 1)]
+    assert any("background TTS generation failed" in record.message for record in caplog.records)
 
 
 def _latest_pipeline_payload(path) -> dict[str, object]:

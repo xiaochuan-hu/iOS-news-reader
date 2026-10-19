@@ -1,7 +1,8 @@
 # HTTP API
 
-/health is public. Every /v1 route uses the existing Bearer authentication. Examples omit
-the Railway hostname.
+`/health` is public. Briefing `/v1` routes use the existing Bearer authentication; the
+`/v1/media/audio/{cache_id}` route instead requires its short-lived signature. Examples omit the
+Railway hostname.
 
 ## Health
 
@@ -31,6 +32,38 @@ Returns only cached spoken_text as text/plain; charset=utf-8. Both GET handlers 
 repository read. They never collect sources, generate, wait for an in-flight refresh, or invoke an
 LLM. If there is no persisted briefing, they return 503 with
 "briefing has not been generated yet".
+
+## Latest audio and signed playback URL
+
+~~~http
+GET /v1/briefings/latest/audio
+Authorization: Bearer TOKEN
+~~~
+
+Returns the cached `audio/mpeg` directly for authenticated diagnostics. If the text-addressed audio
+is missing and TTS is configured, this endpoint may synthesize it on demand. It never invokes an
+LLM or changes briefing text or budget state.
+
+~~~http
+GET /v1/briefings/latest/audio-url
+Authorization: Bearer TOKEN
+~~~
+
+This endpoint never waits for Azure synthesis. If audio is cached, it returns HTTP 200 with
+`status=ready`, `content_type=audio/mpeg`, an expiry timestamp, and a four-hour URL under
+`/v1/media/audio/{cache_id}`. If TTS is configured but audio is missing, it schedules deduplicated
+background preparation and immediately returns HTTP 202 with `status=preparing`,
+`retry_after_seconds=5`, and `Retry-After: 5`. If TTS is unavailable, it returns 503.
+
+The signed media URL uses HMAC-SHA256 authorization in its `expires` and `signature` query
+parameters. It contains no Morning API token and needs no Bearer header. Both GET and HEAD use the
+same signature validation. Invalid or expired signatures return 403. GET responses support normal
+HTTP byte ranges; HEAD returns the media headers without a response body.
+
+Audio cache IDs are SHA-256 values over the complete playback text plus provider, voice, style,
+rate, output format, and cache format version. They reveal neither the briefing ID nor a filesystem
+path. If TTS or URL signing is not configured, the new audio endpoint returns 503 while all existing
+text and refresh endpoints remain unchanged.
 
 ## Production daily refresh
 
@@ -86,8 +119,9 @@ through the same daily budget and has no force, retry, repair, admin override, o
 ## Errors
 
 - 401: missing or invalid API token.
+- 403: invalid or expired signed media URL.
 - 409: manual generation is disabled.
 - 422: malformed or out-of-window local_date, or another invalid body.
-- 503: no cache exists for a cache-only GET, or refresh failed before a usable result.
+- 503: no text cache exists, refresh failed before a usable result, or audio/signing is unavailable.
 
 Tokens, API keys and Authorization headers are never included in application logs.

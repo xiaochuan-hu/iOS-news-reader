@@ -31,6 +31,7 @@ from morning_intelligence.processing import (
 )
 from morning_intelligence.providers import GitHubTrendingProvider
 from morning_intelligence.storage import BriefingRepository
+from morning_intelligence.tts import AudioService
 
 from .collector import CollectorService
 
@@ -81,6 +82,7 @@ class MorningBriefingService:
         collector: CollectorService,
         llm_provider: LLMProvider | None,
         github_provider: GitHubTrendingProvider | None = None,
+        audio_service: AudioService | None = None,
     ) -> None:
         self.settings = settings
         self.preferences = preferences
@@ -88,6 +90,7 @@ class MorningBriefingService:
         self.collector = collector
         self.llm_provider = llm_provider
         self.github_provider = github_provider
+        self.audio_service = audio_service
         self.generator = BriefingGenerator(llm_provider)
         self.editorial_selector = EditorialSelector(preferences)
         # Optimization only. SQLite BEGIN IMMEDIATE is the cross-process correctness lock.
@@ -363,6 +366,7 @@ class MorningBriefingService:
             # INSERT happens only after a complete briefing exists; the prior cache stays readable.
             persistence_started = time.perf_counter()
             self.repository.save_briefing(briefing)
+            self._schedule_audio(briefing)
             stage_timings["persistence_ms"] += (
                 time.perf_counter() - persistence_started
             ) * 1000
@@ -430,6 +434,7 @@ class MorningBriefingService:
                     )
                     persistence_started = time.perf_counter()
                     self.repository.save_briefing(fallback.briefing)
+                    self._schedule_audio(fallback.briefing)
                     stage_timings["persistence_ms"] += (
                         time.perf_counter() - persistence_started
                     ) * 1000
@@ -500,6 +505,14 @@ class MorningBriefingService:
                 metrics.github_fetch_success,
                 metrics.total_latency_ms,
             )
+    def _schedule_audio(self, briefing: Briefing) -> None:
+        if self.audio_service is None:
+            return
+        try:
+            self.audio_service.schedule(briefing.spoken_text)
+        except Exception as exc:
+            logger.warning("could not schedule background TTS generation: %s", exc)
+
     async def _github_repositories(
         self,
         task: asyncio.Task[list[GitHubTrendingRepo]] | None,

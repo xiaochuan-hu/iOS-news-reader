@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -137,6 +138,18 @@ class Settings(BaseSettings):
     morning_min_llm_interval_hours: float = Field(default=20, ge=20, le=168)
     morning_refresh_timezone: str = "Europe/London"
     morning_refresh_time_local: str = "06:00"
+    morning_tts_enabled: bool = False
+    morning_tts_provider: Literal["azure"] = "azure"
+    morning_tts_voice: str = "zh-CN-YunxiNeural"
+    morning_tts_style: str = "newscast"
+    morning_tts_rate: str = "0%"
+    morning_tts_timeout_seconds: float = Field(default=45, gt=0)
+    morning_audio_directory: Path = Path("/app/data/audio")
+    morning_audio_retention_days: int = Field(default=7, ge=1)
+    morning_media_signing_key: str = ""
+    morning_media_url_ttl_seconds: int = Field(default=14_400, ge=300, le=86_400)
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-5-mini"
@@ -165,6 +178,34 @@ class Settings(BaseSettings):
         hour, minute = (int(part) for part in parts)
         if hour > 23 or minute > 59:
             raise ValueError("must be a valid local time")
+        return value
+
+    @field_validator("azure_speech_region")
+    @classmethod
+    def azure_region_must_be_safe(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[a-z0-9-]+", value):
+            raise ValueError("must contain only lowercase letters, numbers, and hyphens")
+        return value
+
+    @field_validator("morning_tts_voice", "morning_tts_style")
+    @classmethod
+    def azure_ssml_names_must_be_safe(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[A-Za-z0-9-]+", value):
+            raise ValueError("must contain only letters, numbers, and hyphens")
+        return value
+
+    @field_validator("morning_tts_rate")
+    @classmethod
+    def azure_rate_must_be_percentage(cls, value: str) -> str:
+        if not re.fullmatch(r"[+-]?\d{1,3}%", value):
+            raise ValueError("must be a percentage such as 0%, +10%, or -10%")
+        return value
+
+    @field_validator("morning_media_signing_key")
+    @classmethod
+    def media_signing_key_must_be_strong_when_set(cls, value: str) -> str:
+        if value and len(value.encode("utf-8")) < 32:
+            raise ValueError("must be at least 32 bytes when configured")
         return value
 
     def load_sources(self) -> SourcesConfig:

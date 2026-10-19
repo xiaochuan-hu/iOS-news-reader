@@ -25,7 +25,9 @@ The alarm never starts research or an LLM request. It only reads `GET /v1/briefi
 - SQLite persistence for items, events, briefings, pipeline runs and the daily LLM budget.
 - Atomic local-calendar and rolling 20-hour budget gates before the outbound request.
 - Startup-safe, cache-only wake path; restart, redeploy and duplicate triggers spend no quota.
-- FastAPI JSON/text contracts, bearer/query-token auth and Docker deployment.
+- FastAPI JSON/text contracts, bearer/query-token auth, signed media auth, and Docker deployment.
+- Optional Azure Speech REST synthesis into text-addressed MP3 files on the persistent volume,
+  with background generation, on-demand recovery, and short-lived signed streaming URLs.
 - Unit, integration, failure and sixteen-case offline evaluation suite.
 
 Architecture and provenance are documented in [docs/architecture.md](docs/architecture.md),
@@ -56,6 +58,9 @@ curl http://localhost:8000/health
 
 curl -H "Authorization: Bearer $MORNING_API_TOKEN" \
   http://localhost:8000/v1/briefings/latest/text
+
+curl -H "Authorization: Bearer $MORNING_API_TOKEN" \
+  http://localhost:8000/v1/briefings/latest/audio-url
 
 curl -X POST \
   -H "Authorization: Bearer $MORNING_API_TOKEN" \
@@ -111,6 +116,12 @@ Railway neither guesses location nor uses server time for the production trigger
 timezone settings apply only when the explicitly enabled legacy `server` trigger is used.
 `LLM_THINKING_MODE` is optional and provider-neutral: when unset, no `thinking` field is sent.
 
+Server-side audio is independently controlled by `MORNING_TTS_ENABLED`. It uses Azure Speech REST,
+not the editorial LLM, so synthesis never consumes or changes the daily DeepSeek allowance. Audio
+is generated from the final `spoken_text`, cached by a SHA-256 content/configuration identity, and
+retained under `MORNING_AUDIO_DIRECTORY`. Missing credentials disable audio without changing the
+existing JSON, text, or daily-refresh behavior.
+
 V5.1 has no hard character or minute limit. It uses a 10–15 minute soft target, with roughly
 200–300 Chinese characters for an ordinary important event and 300–500 for a major one. Each
 selected story is explained as Event, Background, Impact, and What to watch.
@@ -128,18 +139,27 @@ iPhone local 05:00 -> POST daily-refresh -> SQLite
 Alarm Is Stopped -> cached GET -> current-location weather on iPhone -> combine -> Speak Text
 ```
 
+Phase 1 also exposes an authenticated, non-blocking audio-URL request. Cached audio returns a URL
+immediately; a cache miss returns 202/preparing and schedules background synthesis without waiting
+for Azure. Ready URLs are HMAC-authorized for four hours and support GET, HEAD, and byte-range MP3
+streaming; the phone does not need to permanently save the media file. Shortcut construction
+remains intentionally out of scope here.
+
 ## Operational notes
 
 - Run one Uvicorn worker. SQLite still makes budget claims safe across concurrent processes.
 - Put a TLS reverse proxy in front of the service before exposing it publicly.
 - Bearer headers are safer than query tokens.
 - Docker disables Uvicorn access logs so a query-token fallback is not written to its default request log. Apply equivalent redaction at any reverse proxy.
+- Signed media query strings contain authorization material. Keep application access logs disabled
+  and configure any reverse proxy to redact query strings.
 - The application logs run IDs and counts, not API tokens or authorization headers.
 - A cached briefing remains available if feeds or the LLM are down.
 
 ## Current gaps
 
-- No server-side TTS/audio files; iOS Speak Text is the MVP output.
+- The Phase 1 server audio API is implemented; the iPhone Shortcut that hands its signed URL to a
+  media player is not yet implemented.
 - No backend weather provider, API, location field, database table, or weather prose. The iPhone
   obtains current-location weather at actual playback time.
 - No embeddings, Reddit, GitHub releases or deep-dive web research.

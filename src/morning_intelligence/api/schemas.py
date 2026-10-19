@@ -47,6 +47,14 @@ class DailyRefreshResponse(BaseModel):
     budget_reason: str = ""
 
 
+class AudioURLResponse(BaseModel):
+    status: Literal["ready", "preparing"]
+    url: str | None = None
+    expires_at: datetime | None = None
+    content_type: Literal["audio/mpeg"] = "audio/mpeg"
+    retry_after_seconds: int | None = None
+
+
 def client_local_date_is_valid(local_date: date, *, now_utc: datetime | None = None) -> bool:
     server_date = (now_utc or datetime.now(UTC)).astimezone(UTC).date()
     return server_date - timedelta(days=1) <= local_date <= server_date + timedelta(days=1)
