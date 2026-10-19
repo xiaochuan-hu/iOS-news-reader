@@ -114,6 +114,9 @@ async def latest_audio_url(request: Request, response: Response) -> AudioURLResp
         expires=expires,
         signature=signature,
     )
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto.split(",", maxsplit=1)[0].strip().lower() == "https":
+        media_url = media_url.replace(scheme="https")
     return AudioURLResponse(
         status="ready",
         url=str(media_url),

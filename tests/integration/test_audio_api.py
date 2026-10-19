@@ -111,6 +111,7 @@ def test_signed_url_streaming_authentication_expiry_and_range(tmp_path: Path) ->
     assert payload["status"] == "ready"
     assert payload["content_type"] == "audio/mpeg"
     assert "test-token" not in payload["url"]
+    assert payload["url"].startswith("http://")
     assert provider.calls == 1
 
     streamed = client.get(payload["url"])
@@ -161,6 +162,20 @@ def test_signed_url_streaming_authentication_expiry_and_range(tmp_path: Path) ->
         params={"expires": expired_at, "signature": expired_signature},
     )
     assert expired_head.status_code == 403
+
+
+def test_audio_url_promotes_forwarded_https_scheme(tmp_path: Path) -> None:
+    client, _ = make_audio_client(tmp_path)
+    auth_headers = {"Authorization": "Bearer test-token"}
+    assert client.get("/v1/briefings/latest/audio", headers=auth_headers).status_code == 200
+
+    response = client.get(
+        "/v1/briefings/latest/audio-url",
+        headers={**auth_headers, "X-Forwarded-Proto": "https"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["url"].startswith("https://")
 
 
 def test_audio_url_returns_preparing_without_waiting_for_blocked_tts(
