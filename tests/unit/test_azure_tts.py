@@ -37,7 +37,9 @@ async def test_azure_provider_uses_regional_rest_ssml_and_mp3_format(
         "https://uksouth.tts.speech.microsoft.com/cognitiveservices/v1"
     )
     assert headers["Ocp-Apim-Subscription-Key"] == "unit-test-key"
+    assert AZURE_OUTPUT_FORMAT == "audio-48khz-96kbitrate-mono-mp3"
     assert headers["X-Microsoft-OutputFormat"] == AZURE_OUTPUT_FORMAT
+    assert provider.cache_identity["output_format"] == AZURE_OUTPUT_FORMAT
     body = captured["body"]
     assert isinstance(body, bytes)
     assert b'voice name="zh-CN-YunxiNeural"' in body

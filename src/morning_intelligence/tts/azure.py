@@ -8,7 +8,7 @@ from typing import cast
 
 import httpx
 
-AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
+AZURE_OUTPUT_FORMAT = "audio-48khz-96kbitrate-mono-mp3"
 SSML_NAMESPACE = "http://www.w3.org/2001/10/synthesis"
 MSTTS_NAMESPACE = "https://www.w3.org/2001/mstts"
 XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace"
