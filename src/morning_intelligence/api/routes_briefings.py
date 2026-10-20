@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from morning_intelligence.tts import AudioGenerationError, AudioUnavailableError
 
 from .auth import require_auth
+from .external_urls import external_url_for
 from .schemas import (
     AudioURLResponse,
     BriefingResponse,
@@ -110,13 +111,12 @@ async def latest_audio_url(request: Request, response: Response) -> AudioURLResp
         request.app.state.settings.morning_media_url_ttl_seconds
     )
     signature = signer.sign(artifact.cache_id, expires)
-    media_url = request.url_for("media_audio", cache_id=artifact.cache_id).include_query_params(
+    media_url = external_url_for(
+        request, "media_audio", cache_id=artifact.cache_id
+    ).include_query_params(
         expires=expires,
         signature=signature,
     )
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    if forwarded_proto.split(",", maxsplit=1)[0].strip().lower() == "https":
-        media_url = media_url.replace(scheme="https")
     return AudioURLResponse(
         status="ready",
         url=str(media_url),

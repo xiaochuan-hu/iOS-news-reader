@@ -148,6 +148,7 @@ class Settings(BaseSettings):
     morning_audio_retention_days: int = Field(default=7, ge=1)
     morning_media_signing_key: str = ""
     morning_media_url_ttl_seconds: int = Field(default=14_400, ge=300, le=86_400)
+    morning_podcast_token: str = ""
     azure_speech_key: str = ""
     azure_speech_region: str = ""
     llm_api_key: str = ""
@@ -201,9 +202,9 @@ class Settings(BaseSettings):
             raise ValueError("must be a percentage such as 0%, +10%, or -10%")
         return value
 
-    @field_validator("morning_media_signing_key")
+    @field_validator("morning_media_signing_key", "morning_podcast_token")
     @classmethod
-    def media_signing_key_must_be_strong_when_set(cls, value: str) -> str:
+    def private_tokens_must_be_strong_when_set(cls, value: str) -> str:
         if value and len(value.encode("utf-8")) < 32:
             raise ValueError("must be at least 32 bytes when configured")
         return value

@@ -8,7 +8,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from morning_intelligence.api import briefings_router, health_router, media_router
+from morning_intelligence.api import (
+    briefings_router,
+    health_router,
+    media_router,
+    podcast_router,
+)
 from morning_intelligence.config import Settings, get_settings
 from morning_intelligence.llm import OpenAICompatibleProvider
 from morning_intelligence.providers import GitHubTrendingProvider
@@ -133,6 +138,7 @@ def create_app(
     application.include_router(health_router)
     application.include_router(briefings_router)
     application.include_router(media_router)
+    application.include_router(podcast_router)
     return application
 
 

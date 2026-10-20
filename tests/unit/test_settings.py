@@ -26,6 +26,7 @@ def test_default_daily_refresh_configuration() -> None:
     assert settings.morning_tts_timeout_seconds == 45
     assert settings.morning_audio_retention_days == 7
     assert settings.morning_media_url_ttl_seconds == 14_400
+    assert settings.morning_podcast_token == ""
 
 
 @pytest.mark.parametrize("timezone", ["Europe/London", "Asia/Singapore", "UTC"])
@@ -86,3 +87,11 @@ def test_media_signing_key_requires_adequate_length_when_configured() -> None:
 
     key = "k" * 32
     assert Settings(_env_file=None, morning_media_signing_key=key).morning_media_signing_key == key
+
+
+def test_podcast_token_requires_adequate_length_when_configured() -> None:
+    with pytest.raises(ValidationError, match="at least 32 bytes"):
+        Settings(_env_file=None, morning_podcast_token="too-short")
+
+    token = "p" * 32
+    assert Settings(_env_file=None, morning_podcast_token=token).morning_podcast_token == token
