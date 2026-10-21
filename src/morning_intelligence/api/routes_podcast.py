@@ -77,9 +77,14 @@ async def freshness_test_feed(
     ElementTree.SubElement(channel, _itunes("image"), {"href": str(artwork_url)})
 
     now = int(datetime.now(UTC).timestamp())
-    labels = ("B", "A") if now >= start + FRESHNESS_DELAY_SECONDS else ("A",)
+    if now >= start + (2 * FRESHNESS_DELAY_SECONDS):
+        labels = ("C", "B", "A")
+    elif now >= start + FRESHNESS_DELAY_SECONDS:
+        labels = ("B", "A")
+    else:
+        labels = ("A",)
     for label in labels:
-        published_at = start + (FRESHNESS_DELAY_SECONDS if label == "B" else 0)
+        published_at = start + ({"A": 0, "B": 1, "C": 2}[label] * FRESHNESS_DELAY_SECONDS)
         _add_episode(
             channel,
             request=request,

@@ -117,45 +117,59 @@ def test_podcast_feed_hides_missing_and_incorrect_token(tmp_path: Path) -> None:
     assert incorrect.status_code == 404
 
 
-def test_podcast_feed_transitions_from_episode_a_to_b_then_a_and_is_stable(
+def test_podcast_feed_transitions_from_a_to_b_then_c_and_is_stable(
     tmp_path: Path,
 ) -> None:
     client, service, provider, cache_id = make_podcast_client(tmp_path)
     assert cache_id is not None
-    before_start = int(time.time()) + 60
-    before = client.get(_feed_path(before_start))
+    now = int(time.time())
+    a_start = now
+    a_response = client.get(_feed_path(a_start))
 
-    assert before.status_code == 200
-    assert before.headers["content-type"].startswith("application/rss+xml")
-    before_root = ElementTree.fromstring(before.content)
-    assert [item.findtext("title") for item in before_root.findall("./channel/item")] == [
+    assert a_response.status_code == 200
+    assert a_response.headers["content-type"].startswith("application/rss+xml")
+    a_root = ElementTree.fromstring(a_response.content)
+    assert [item.findtext("title") for item in a_root.findall("./channel/item")] == [
         "Freshness Test Episode A"
     ]
-    assert before_root.findtext("./channel/title") == "Morning Intelligence Freshness Test"
+    assert a_root.findtext("./channel/title") == "Morning Intelligence Freshness Test"
     assert (
-        before_root.findtext("./channel/description")
+        a_root.findtext("./channel/description")
         == "Private freshness test for Morning Intelligence"
     )
-    assert before_root.findtext("./channel/language") == "zh-cn"
-    assert before_root.findtext(f"./channel/{{{ITUNES_NAMESPACE}}}explicit") == "false"
-    assert before_root.findtext(f"./channel/{{{ITUNES_NAMESPACE}}}block") == "Yes"
-    category = before_root.find(f"./channel/{{{ITUNES_NAMESPACE}}}category")
+    assert a_root.findtext("./channel/language") == "zh-cn"
+    assert a_root.findtext(f"./channel/{{{ITUNES_NAMESPACE}}}explicit") == "false"
+    assert a_root.findtext(f"./channel/{{{ITUNES_NAMESPACE}}}block") == "Yes"
+    category = a_root.find(f"./channel/{{{ITUNES_NAMESPACE}}}category")
     assert category is not None and category.get("text") == "Technology"
 
-    after_start = int(time.time()) - 301
-    after = client.get(_feed_path(after_start))
-    repeated = client.get(_feed_path(after_start))
-    after_root = ElementTree.fromstring(after.content)
-    repeated_root = ElementTree.fromstring(repeated.content)
-    items = after_root.findall("./channel/item")
-
-    assert [item.findtext("title") for item in items] == [
+    b_start = now - 300
+    b_root = ElementTree.fromstring(client.get(_feed_path(b_start)).content)
+    assert [item.findtext("title") for item in b_root.findall("./channel/item")] == [
         "Freshness Test Episode B",
         "Freshness Test Episode A",
     ]
+
+    c_start = now - 600
+    c_response = client.get(_feed_path(c_start))
+    repeated = client.get(_feed_path(c_start))
+    c_root = ElementTree.fromstring(c_response.content)
+    repeated_root = ElementTree.fromstring(repeated.content)
+    items = c_root.findall("./channel/item")
+
+    assert [item.findtext("title") for item in items] == [
+        "Freshness Test Episode C",
+        "Freshness Test Episode B",
+        "Freshness Test Episode A",
+    ]
+    assert [item.findtext("description") for item in items] == [
+        "Morning Intelligence private freshness test episode C.",
+        "Morning Intelligence private freshness test episode B.",
+        "Morning Intelligence private freshness test episode A.",
+    ]
     assert [
         int(parsedate_to_datetime(item.findtext("pubDate", "")).timestamp()) for item in items
-    ] == [after_start + 300, after_start]
+    ] == [c_start + 600, c_start + 300, c_start]
     guids = [item.findtext("guid") for item in items]
     repeated_guids = [
         item.findtext("guid") for item in repeated_root.findall("./channel/item")
@@ -163,9 +177,9 @@ def test_podcast_feed_transitions_from_episode_a_to_b_then_a_and_is_stable(
     assert guids == repeated_guids
     expected_episode_ids = [
         hashlib.sha256(
-            f"morning-podcast-freshness-v1:{after_start}:{cache_id}:{label}".encode()
+            f"morning-podcast-freshness-v1:{c_start}:{cache_id}:{label}".encode()
         ).hexdigest()
-        for label in ("B", "A")
+        for label in ("C", "B", "A")
     ]
     assert guids == [
         f"morning-intelligence-freshness:{episode_id}"
@@ -175,8 +189,8 @@ def test_podcast_feed_transitions_from_episode_a_to_b_then_a_and_is_stable(
 
     enclosures = [item.find("enclosure") for item in items]
     enclosure_urls = [enclosure.get("url") for enclosure in enclosures if enclosure is not None]
-    assert len(enclosure_urls) == 2
-    assert len(set(enclosure_urls)) == 2
+    assert len(enclosure_urls) == 3
+    assert len(set(enclosure_urls)) == 3
     assert all(
         enclosure is not None
         and enclosure.get("length")
@@ -184,7 +198,7 @@ def test_podcast_feed_transitions_from_episode_a_to_b_then_a_and_is_stable(
         and enclosure.get("type") == "audio/mpeg"
         for enclosure in enclosures
     )
-    assert service.latest_calls == 3
+    assert service.latest_calls == 4
     assert service.refresh_calls == service.generate_calls == 0
     assert provider.calls == 0
 
