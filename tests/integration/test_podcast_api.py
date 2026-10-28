@@ -33,13 +33,21 @@ class CacheOnlyBriefingService:
             if cached
             else None
         )
+        self.briefings = [self.briefing] if self.briefing is not None else []
         self.latest_calls = 0
+        self.recent_calls = 0
+        self.recent_limits: list[int] = []
         self.refresh_calls = 0
         self.generate_calls = 0
 
     def latest(self) -> Briefing | None:
         self.latest_calls += 1
         return self.briefing
+
+    def recent(self, limit: int) -> list[Briefing]:
+        self.recent_calls += 1
+        self.recent_limits.append(limit)
+        return self.briefings[:limit]
 
     async def deadline_daily_refresh(self, local_date: date) -> None:
         self.refresh_calls += 1
@@ -101,6 +109,143 @@ def make_podcast_client(
         audio_service=audio_service,
     )
     return TestClient(app), service, provider, cache_id
+
+
+def make_production_podcast_client(
+    tmp_path: Path,
+    briefings: list[Briefing],
+    *,
+    cached_briefing_ids: set[str] | None = None,
+) -> tuple[TestClient, CacheOnlyBriefingService, NoSynthesisProvider, AudioService]:
+    settings = Settings(
+        _env_file=None,
+        morning_podcast_token=PODCAST_TOKEN,
+        morning_audio_directory=tmp_path / "audio",
+    )
+    service = CacheOnlyBriefingService(cached=False)
+    service.briefings = briefings
+    service.briefing = briefings[0] if briefings else None
+    provider = NoSynthesisProvider()
+    audio_service = AudioService(
+        provider=provider,
+        audio_directory=settings.morning_audio_directory,
+    )
+    cached_ids = (
+        {briefing.id for briefing in briefings}
+        if cached_briefing_ids is None
+        else cached_briefing_ids
+    )
+    settings.morning_audio_directory.mkdir(parents=True)
+    for briefing in briefings:
+        if briefing.id not in cached_ids:
+            continue
+        cache_id = audio_service.cache_id_for_text(briefing.spoken_text)
+        (settings.morning_audio_directory / f"{cache_id}.mp3").write_bytes(
+            AUDIO_BYTES + briefing.id.encode()
+        )
+    app = create_app(
+        settings=settings,
+        service=service,  # type: ignore[arg-type]
+        audio_service=audio_service,
+    )
+    return TestClient(app), service, provider, audio_service
+
+
+def test_production_feed_is_stable_unique_and_newest_first(tmp_path: Path) -> None:
+    briefings = [
+        Briefing(
+            id=f"briefing-{day}",
+            generated_at=datetime(2026, 10, day, 5, 30, tzinfo=UTC),
+            event_count=1,
+            estimated_duration_seconds=30,
+            spoken_text="用于验证每日播客身份的相同缓存音频。",
+        )
+        for day in (28, 27, 26)
+    ]
+    client, service, provider, _ = make_production_podcast_client(tmp_path, briefings)
+
+    first = client.get(f"/v1/podcast/{PODCAST_TOKEN}/feed.xml")
+    repeated = client.get(f"/v1/podcast/{PODCAST_TOKEN}/feed.xml")
+
+    assert first.status_code == repeated.status_code == 200
+    root = ElementTree.fromstring(first.content)
+    repeated_root = ElementTree.fromstring(repeated.content)
+    channel = root.find("./channel")
+    assert channel is not None
+    assert channel.findtext("title") == "Morning Intelligence"
+    assert channel.findtext("language") == "zh-cn"
+    assert channel.findtext(f"{{{ITUNES_NAMESPACE}}}explicit") == "false"
+    assert channel.findtext(f"{{{ITUNES_NAMESPACE}}}block") == "Yes"
+    assert channel.findtext("link") == f"http://testserver/v1/podcast/{PODCAST_TOKEN}/feed.xml"
+
+    items = root.findall("./channel/item")
+    repeated_items = repeated_root.findall("./channel/item")
+    assert [item.findtext("title") for item in items] == [
+        "Morning Intelligence — 2026-10-28",
+        "Morning Intelligence — 2026-10-27",
+        "Morning Intelligence — 2026-10-26",
+    ]
+    assert [item.findtext("description") for item in items] == [
+        f"Daily private Morning Intelligence briefing for 2026-10-{day}."
+        for day in (28, 27, 26)
+    ]
+    assert [parsedate_to_datetime(item.findtext("pubDate", "")) for item in items] == [
+        briefing.generated_at for briefing in briefings
+    ]
+
+    guids = [item.findtext("guid") for item in items]
+    repeated_guids = [item.findtext("guid") for item in repeated_items]
+    assert guids == repeated_guids
+    assert guids == [f"morning-intelligence:{briefing.id}" for briefing in briefings]
+    assert len(set(guids)) == len(briefings)
+
+    enclosure_urls = [item.find("enclosure").get("url") for item in items]  # type: ignore[union-attr]
+    repeated_enclosure_urls = [
+        item.find("enclosure").get("url") for item in repeated_items  # type: ignore[union-attr]
+    ]
+    assert enclosure_urls == repeated_enclosure_urls
+    assert len(set(enclosure_urls)) == len(briefings)
+    assert all("?" not in url for url in enclosure_urls)
+    assert service.recent_calls == 2
+    assert service.recent_limits == [7, 7]
+    assert service.latest_calls == service.refresh_calls == service.generate_calls == 0
+    assert provider.calls == 0
+
+
+def test_production_feed_skips_uncached_audio_and_rejects_invalid_token(
+    tmp_path: Path,
+) -> None:
+    newest = Briefing(
+        id="newest-audio-pending",
+        generated_at=datetime(2026, 10, 28, 5, 30, tzinfo=UTC),
+        event_count=1,
+        estimated_duration_seconds=30,
+        spoken_text="今日音频正在准备。",
+    )
+    previous = Briefing(
+        id="previous-audio-ready",
+        generated_at=datetime(2026, 10, 27, 5, 30, tzinfo=UTC),
+        event_count=1,
+        estimated_duration_seconds=30,
+        spoken_text="昨日音频已经就绪。",
+    )
+    client, service, provider, _ = make_production_podcast_client(
+        tmp_path,
+        [newest, previous],
+        cached_briefing_ids={previous.id},
+    )
+
+    response = client.get(f"/v1/podcast/{PODCAST_TOKEN}/feed.xml")
+    invalid = client.get(f"/v1/podcast/{'x' * 32}/feed.xml")
+
+    assert response.status_code == 200
+    root = ElementTree.fromstring(response.content)
+    assert [item.findtext("guid") for item in root.findall("./channel/item")] == [
+        f"morning-intelligence:{previous.id}"
+    ]
+    assert invalid.status_code == 404
+    assert service.recent_calls == 1
+    assert service.refresh_calls == service.generate_calls == provider.calls == 0
 
 
 def test_podcast_feed_hides_missing_and_incorrect_token(tmp_path: Path) -> None:

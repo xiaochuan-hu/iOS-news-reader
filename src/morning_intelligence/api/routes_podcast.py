@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response
 
+from morning_intelligence.domain import Briefing
 from morning_intelligence.tts import (
     AudioArtifact,
     AudioService,
@@ -21,6 +22,7 @@ from morning_intelligence.tts import (
 from .external_urls import external_url_for
 
 FRESHNESS_DELAY_SECONDS = 300
+PRODUCTION_FEED_RETENTION = 7
 MAX_START_TIMESTAMP = 253_402_300_499
 ITUNES_NAMESPACE = "http://www.itunes.com/dtds/podcast-1.0.dtd"
 ARTWORK_PATH = Path(__file__).with_name("assets") / "podcast-freshness-test.png"
@@ -41,6 +43,46 @@ router = APIRouter(
     tags=["podcast"],
     dependencies=[Depends(require_podcast_token)],
 )
+
+
+@router.get("/feed.xml", name="podcast_feed")
+async def podcast_feed(token: str, request: Request) -> Response:
+    feed_url = external_url_for(request, "podcast_feed", token=token)
+    root = ElementTree.Element("rss", {"version": "2.0"})
+    channel = ElementTree.SubElement(root, "channel")
+    _text_element(channel, "title", "Morning Intelligence")
+    _text_element(channel, "link", str(feed_url))
+    _text_element(
+        channel,
+        "description",
+        "Daily private Morning Intelligence briefing.",
+    )
+    _text_element(channel, "language", "zh-cn")
+    _text_element(channel, _itunes("explicit"), "false")
+    _text_element(channel, _itunes("block"), "Yes")
+
+    audio_service = cast(AudioService, request.app.state.audio_service)
+    for briefing in request.app.state.service.recent(PRODUCTION_FEED_RETENTION):
+        try:
+            artifact = audio_service.get_cached_for_text(briefing.spoken_text)
+            if artifact is None:
+                continue
+            byte_length = artifact.path.stat().st_size
+        except (AudioUnavailableError, OSError):
+            continue
+        if byte_length <= 0:
+            continue
+        _add_production_episode(
+            channel,
+            request=request,
+            token=token,
+            briefing=briefing,
+            artifact=artifact,
+            byte_length=byte_length,
+        )
+
+    xml = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    return Response(content=xml, media_type="application/rss+xml")
 
 
 @router.get("/freshness-test.xml", name="podcast_freshness_feed")
@@ -191,8 +233,58 @@ def _add_episode(
     _text_element(item, _itunes("explicit"), "false")
 
 
+def _add_production_episode(
+    channel: ElementTree.Element,
+    *,
+    request: Request,
+    token: str,
+    briefing: Briefing,
+    artifact: AudioArtifact,
+    byte_length: int,
+) -> None:
+    episode_id = _production_episode_id(briefing.id)
+    enclosure_url = external_url_for(
+        request,
+        "podcast_media",
+        token=token,
+        cache_id=artifact.cache_id,
+        episode_id=episode_id,
+    )
+    episode_date = briefing.generated_at.date().isoformat()
+    published_at = briefing.generated_at
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=UTC)
+    else:
+        published_at = published_at.astimezone(UTC)
+    item = ElementTree.SubElement(channel, "item")
+    _text_element(item, "title", f"Morning Intelligence — {episode_date}")
+    _text_element(
+        item,
+        "description",
+        f"Daily private Morning Intelligence briefing for {episode_date}.",
+    )
+    _text_element(item, "pubDate", format_datetime(published_at, usegmt=True))
+    guid = _text_element(item, "guid", f"morning-intelligence:{briefing.id}")
+    guid.set("isPermaLink", "false")
+    ElementTree.SubElement(
+        item,
+        "enclosure",
+        {
+            "url": str(enclosure_url),
+            "length": str(byte_length),
+            "type": "audio/mpeg",
+        },
+    )
+    _text_element(item, _itunes("explicit"), "false")
+
+
 def _episode_id(start: int, cache_id: str, label: str) -> str:
     identity = f"morning-podcast-freshness-v1:{start}:{cache_id}:{label}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _production_episode_id(briefing_id: str) -> str:
+    identity = f"morning-podcast-v1:{briefing_id}"
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 

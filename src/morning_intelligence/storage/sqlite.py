@@ -306,6 +306,16 @@ class SQLiteRepository:
             ).fetchone()
         return Briefing.model_validate_json(row["payload"]) if row else None
 
+    def get_recent_briefings(self, limit: int) -> list[Briefing]:
+        if limit < 1:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM briefings ORDER BY generated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [Briefing.model_validate_json(row["payload"]) for row in rows]
+
     def save_pipeline_run(self, metrics: PipelineMetrics) -> None:
         with self._connect() as connection:
             connection.execute(

@@ -100,6 +100,10 @@ class MorningBriefingService:
         """Cache-only read. This method must never collect sources or invoke an LLM."""
         return self.repository.get_latest_briefing()
 
+    def recent(self, limit: int) -> list[Briefing]:
+        """Return persisted briefings without collecting sources or invoking an LLM."""
+        return self.repository.get_recent_briefings(limit)
+
     async def daily_refresh(
         self, local_date: date, *, now_utc: datetime | None = None
     ) -> DailyRefreshResult:

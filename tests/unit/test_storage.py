@@ -64,6 +64,28 @@ def test_sqlite_round_trip_and_novelty_history(tmp_path, make_item) -> None:
     assert repository.recent_spoken_titles(3) == ["Important event"]
 
 
+def test_recent_briefings_are_reverse_chronological_and_limited(tmp_path) -> None:
+    repository = SQLiteRepository(tmp_path / "recent.db")
+    repository.initialize()
+    briefings = [
+        Briefing(
+            id=f"briefing-{day}",
+            generated_at=datetime(2026, 10, day, 5, tzinfo=UTC),
+            event_count=1,
+            estimated_duration_seconds=10,
+            spoken_text=f"Briefing {day}",
+        )
+        for day in (26, 28, 27)
+    ]
+    for briefing in briefings:
+        repository.save_briefing(briefing)
+
+    assert [
+        briefing.id for briefing in repository.get_recent_briefings(2)
+    ] == ["briefing-28", "briefing-27"]
+    assert repository.get_recent_briefings(0) == []
+
+
 def test_budget_same_date_and_rolling_interval_are_fail_closed(tmp_path) -> None:
     repository = SQLiteRepository(tmp_path / "budget.db")
     repository.initialize()
