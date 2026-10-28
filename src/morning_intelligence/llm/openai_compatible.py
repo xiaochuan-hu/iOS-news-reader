@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from morning_intelligence.domain import (
     EditorialBriefingOutput,
     EditorialBriefingResult,
+    EmailMessage,
     EventIntelligence,
     GitHubRepositoryIntelligence,
     GitHubTrendingRepo,
@@ -47,6 +48,7 @@ class OpenAICompatibleProvider(LLMProvider):
         language: str,
         characters_per_minute: int,
         github_repositories: list[GitHubTrendingRepo] | None = None,
+        email_messages: list[EmailMessage] | None = None,
     ) -> EditorialBriefingResult:
         # V5 intentionally accepts these legacy arguments without turning them into
         # a completion budget. Deep analysis determines the appropriate length.
@@ -62,6 +64,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     "hard_limit": False,
                 },
                 "fresh_news_events": _event_payload(events),
+                "ucl_email_messages": _email_payload(email_messages or []),
                 "github_trending_top10": [
                     repository.model_dump() for repository in (github_repositories or [])
                 ],
@@ -78,6 +81,9 @@ class OpenAICompatibleProvider(LLMProvider):
                             "source_consensus": "来源共识或分歧",
                         }
                     ],
+                    "email_spoken_text": (
+                        "只含个人晨间收件箱摘要的自然简体中文口播纯文本；无邮件时为空"
+                    ),
                     "news_spoken_text": "只含新闻的自然简体中文口播纯文本",
                     "github_repositories": [
                         {
@@ -146,6 +152,21 @@ def _event_payload(events: list[NewsEvent]) -> list[dict[str, Any]]:
     ]
 
 
+def _email_payload(messages: list[EmailMessage]) -> list[dict[str, Any]]:
+    return [
+        {
+            "message_id": message.message_id,
+            "received_at": message.received_at.isoformat(),
+            "sender": message.sender,
+            "subject": message.subject,
+            "snippet": message.snippet,
+            "body_text": message.body_text[:4000],
+        }
+        for message in messages
+        if not message.subject.startswith("UCL Morning Brief |")
+    ]
+
+
 def _deduplicated_evidence(event: NewsEvent) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     descriptions: set[str] = set()
@@ -173,8 +194,12 @@ def parse_editorial_briefing(
 ) -> EditorialBriefingOutput:
     intelligence = parse_event_intelligence(data, expected_ids=expected_ids)
     spoken_text = data.get("news_spoken_text", data.get("spoken_text", ""))
+    email_spoken_text = data.get("email_spoken_text", "")
     return EditorialBriefingOutput(
         events=list(intelligence.values()),
+        email_spoken_text=(
+            email_spoken_text if isinstance(email_spoken_text, str) else ""
+        ),
         news_spoken_text=spoken_text if isinstance(spoken_text, str) else "",
         github_repositories=_parse_github_intelligence(
             data, expected_repositories=expected_repositories or set()

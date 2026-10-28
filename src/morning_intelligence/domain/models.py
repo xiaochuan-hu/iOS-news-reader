@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from .enums import PipelineStatus, SourceType
 
@@ -74,6 +74,39 @@ class GitHubTrendingRepo(BaseModel):
     stars_today: int | None = Field(default=None, ge=0)
 
 
+class EmailMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(min_length=1, max_length=512)
+    thread_id: str | None = Field(default=None, max_length=512)
+    received_at: datetime
+    sender: str = Field(min_length=1, max_length=1000)
+    recipients: list[str] = Field(default_factory=list, max_length=100)
+    cc: list[str] = Field(default_factory=list, max_length=100)
+    subject: str = Field(default="", max_length=1000)
+    snippet: str = Field(default="", max_length=2000)
+    body_text: str = Field(default="", max_length=12_000)
+
+    @field_validator("message_id", "sender", mode="before")
+    @classmethod
+    def required_identity_fields_must_not_be_blank(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("received_at")
+    @classmethod
+    def received_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("received_at must be timezone-aware")
+        return value
+
+    @field_validator("recipients", "cc")
+    @classmethod
+    def addresses_must_be_reasonable(cls, value: list[str]) -> list[str]:
+        if any(len(address) > 1000 for address in value):
+            raise ValueError("email address fields must not exceed 1000 characters")
+        return value
+
+
 class GitHubRepositoryIntelligence(BaseModel):
     repo: str
     summary_zh: str = Field(default="", max_length=500)
@@ -92,6 +125,7 @@ class LLMUsage(BaseModel):
 
 class EditorialBriefingOutput(BaseModel):
     events: list[EventIntelligence] = Field(default_factory=list)
+    email_spoken_text: str = ""
     news_spoken_text: str = Field(
         default="", validation_alias=AliasChoices("news_spoken_text", "spoken_text")
     )

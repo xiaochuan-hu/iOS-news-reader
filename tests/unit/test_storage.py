@@ -2,7 +2,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 
-from morning_intelligence.domain import Briefing, GitHubTrendingRepo, NewsEvent
+from morning_intelligence.domain import Briefing, EmailMessage, GitHubTrendingRepo, NewsEvent
 from morning_intelligence.processing import normalize_item
 from morning_intelligence.storage import SQLiteRepository
 
@@ -206,6 +206,61 @@ def test_github_snapshot_round_trip_is_scoped_to_exact_date(tmp_path) -> None:
             ).fetchall()
         }
     assert all("weather" not in name.casefold() for name in table_names)
+
+
+def test_email_round_trip_reopen_exact_window_and_feedback_filter(tmp_path) -> None:
+    path = tmp_path / "email.db"
+    repository = SQLiteRepository(path)
+    repository.initialize()
+    start = datetime(2026, 10, 27, 6, tzinfo=UTC)
+    end = datetime(2026, 10, 28, 6, tzinfo=UTC)
+    messages = [
+        _email("before", start - timedelta(microseconds=1)),
+        _email("start", start),
+        _email("middle", start + timedelta(hours=12)),
+        _email("end", end),
+        _email("after", end + timedelta(microseconds=1)),
+        _email("feedback", start + timedelta(hours=1), subject="UCL Morning Brief | 2026-10-27"),
+    ]
+
+    assert repository.upsert_email_messages(messages) == 5
+    reopened = SQLiteRepository(path)
+    reopened.initialize()
+    result = reopened.get_email_messages(start, end)
+
+    assert [message.message_id for message in result] == ["start", "middle", "end"]
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM email_messages").fetchone()[0] == 5
+        assert connection.execute(
+            "SELECT COUNT(*) FROM email_messages WHERE message_id = 'feedback'"
+        ).fetchone()[0] == 0
+
+
+def test_email_upsert_is_idempotent_by_gmail_message_id(tmp_path) -> None:
+    repository = SQLiteRepository(tmp_path / "email-idempotent.db")
+    repository.initialize()
+    received_at = datetime(2026, 10, 28, 5, tzinfo=UTC)
+
+    repository.upsert_email_messages([_email("gmail-stable-id", received_at, subject="First")])
+    repository.upsert_email_messages([_email("gmail-stable-id", received_at, subject="Updated")])
+
+    result = repository.get_email_messages(received_at, received_at)
+    assert len(result) == 1
+    assert result[0].subject == "Updated"
+
+
+def _email(message_id: str, received_at: datetime, *, subject: str = "Module update"):
+    return EmailMessage(
+        message_id=message_id,
+        thread_id=f"thread-{message_id}",
+        received_at=received_at,
+        sender="UCL <ucl@example.test>",
+        recipients=["student@example.test"],
+        cc=[],
+        subject=subject,
+        snippet="A useful update",
+        body_text="Evidence-backed email body",
+    )
 
 
 def _claim(repository: SQLiteRepository, local_date: date, now: datetime):

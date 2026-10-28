@@ -125,3 +125,23 @@ through the same daily budget and has no force, retry, repair, admin override, o
 - 503: no text cache exists, refresh failed before a usable result, or audio/signing is unavailable.
 
 Tokens, API keys and Authorization headers are never included in application logs.
+
+## Private email ingestion
+
+~~~http
+POST /v1/email-ingest
+Authorization: Bearer EMAIL_INGEST_TOKEN
+Content-Type: application/json
+
+{"messages":[{"message_id":"gmail-id","thread_id":"thread-id","received_at":"2026-10-28T05:04:00Z","sender":"UCL <ucl@example.test>","recipients":["student@example.test"],"cc":[],"subject":"Module update","snippet":"A concise preview","body_text":"Plain-text email evidence"}]}
+~~~
+
+This route uses the separate `MORNING_EMAIL_INGEST_TOKEN`, accepts at most 100 messages, and only
+validates and upserts them into SQLite by stable Gmail `message_id`. It never invokes the editorial
+LLM, TTS, or daily refresh. Attachments are not accepted. Generated messages whose subject begins
+with `UCL Morning Brief |` are discarded server-side.
+
+The next daily refresh reads at most 80 persisted messages from the same inclusive rolling 24-hour
+UTC window used for news. Email evidence is sent as `ucl_email_messages` in the existing single
+combined editorial request; stored bodies are limited to 12,000 characters and the LLM receives at
+most 4,000 characters per message.

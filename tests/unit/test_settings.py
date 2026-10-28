@@ -27,6 +27,7 @@ def test_default_daily_refresh_configuration() -> None:
     assert settings.morning_audio_retention_days == 7
     assert settings.morning_media_url_ttl_seconds == 14_400
     assert settings.morning_podcast_token == ""
+    assert settings.morning_email_ingest_token == ""
 
 
 @pytest.mark.parametrize("timezone", ["Europe/London", "Asia/Singapore", "UTC"])

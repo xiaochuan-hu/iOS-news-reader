@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from morning_intelligence.domain import GitHubTrendingRepo, NewsEvent
+from morning_intelligence.domain import EmailMessage, GitHubTrendingRepo, NewsEvent
 from morning_intelligence.llm import OpenAICompatibleProvider, parse_editorial_briefing
 from morning_intelligence.llm.prompts import COMBINED_EDITORIAL_SYSTEM_PROMPT
 
@@ -138,6 +138,21 @@ def test_combined_parser_isolates_bad_unknown_and_duplicate_rows() -> None:
     assert output.events[0].summary_zh == "第二件事"
 
 
+def test_email_spoken_text_parser_is_backward_compatible() -> None:
+    legacy = parse_editorial_briefing(
+        {"events": [], "spoken_text": "旧版新闻正文"},
+        expected_ids=set(),
+    )
+    current = parse_editorial_briefing(
+        {"events": [], "email_spoken_text": "邮件摘要", "news_spoken_text": "新闻正文"},
+        expected_ids=set(),
+    )
+
+    assert legacy.email_spoken_text == ""
+    assert legacy.news_spoken_text == "旧版新闻正文"
+    assert current.email_spoken_text == "邮件摘要"
+
+
 def test_combined_parser_accepts_only_first_valid_input_github_repository() -> None:
     output = parse_editorial_briefing(
         {
@@ -200,6 +215,47 @@ async def test_combined_provider_sends_github_in_same_single_request(make_item) 
     payload = json.loads(calls[0]["messages"][1]["content"])  # type: ignore[index]
     assert payload["github_trending_top10"][0]["full_name"] == "owner/repo"
     assert result.output.github_repositories[0].repo == "owner/repo"
+
+
+async def test_email_evidence_is_capped_inside_same_single_request(make_item) -> None:
+    calls: list[dict[str, object]] = []
+    email = EmailMessage(
+        message_id="gmail-1",
+        received_at="2026-10-28T05:04:00Z",
+        sender="UCL Careers <careers@example.test>",
+        recipients=["student@example.test"],
+        subject="Engineering & Built Environment Fair",
+        snippet="Booking instructions changed",
+        body_text="x" * 12_000,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        content = {
+            "events": [],
+            "email_spoken_text": "邮件方面，招聘会的预约说明有更新。",
+            "news_spoken_text": _long_chinese_script(),
+            "github_repositories": [],
+        }
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(content)}}]},
+            request=request,
+        )
+
+    result = await _provider(handler).generate_editorial_briefing(
+        [_event(make_item)],
+        target_minutes=5,
+        language="zh-CN",
+        characters_per_minute=260,
+        email_messages=[email],
+    )
+
+    assert len(calls) == 1
+    payload = json.loads(calls[0]["messages"][1]["content"])  # type: ignore[index]
+    assert payload["ucl_email_messages"][0]["message_id"] == "gmail-1"
+    assert len(payload["ucl_email_messages"][0]["body_text"]) == 4000
+    assert result.output.email_spoken_text.startswith("邮件方面")
 
 
 @pytest.mark.parametrize("thinking_mode", [None, "disabled", "enabled"])
@@ -317,6 +373,9 @@ def test_combined_prompt_enforces_grounding_and_natural_spoken_output() -> None:
         "对开发者有什么意义",
         "不要机械说第一条",
         "不得输出网址",
+        "个人晨间收件箱简报",
+        "今天课程：过去二十四小时邮件中未检测到课程时间",
+        "最多三项",
     ):
         assert phrase in COMBINED_EDITORIAL_SYSTEM_PROMPT
 

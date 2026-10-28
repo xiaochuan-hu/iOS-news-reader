@@ -6,7 +6,9 @@ from morning_intelligence.briefing import BriefingGenerator
 from morning_intelligence.domain import (
     EditorialBriefingOutput,
     EditorialBriefingResult,
+    EmailMessage,
     EventIntelligence,
+    GitHubTrendingRepo,
     LLMUsage,
     NewsEvent,
 )
@@ -71,6 +73,36 @@ class FailingProvider(RecordingProvider):
     ) -> EditorialBriefingResult:
         self.calls += 1
         raise ValueError("malformed JSON")
+
+
+class EmailRecordingProvider(RecordingProvider):
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self.fail = fail
+        self.email_messages: list[EmailMessage] = []
+
+    async def generate_editorial_briefing(
+        self,
+        events: list[NewsEvent],
+        *,
+        target_minutes: int,
+        language: str,
+        characters_per_minute: int,
+        github_repositories: list[GitHubTrendingRepo] | None = None,
+        email_messages: list[EmailMessage] | None = None,
+    ) -> EditorialBriefingResult:
+        del target_minutes, language, characters_per_minute, github_repositories
+        self.calls += 1
+        self.email_messages = email_messages or []
+        if self.fail:
+            raise ValueError("malformed JSON")
+        return EditorialBriefingResult(
+            output=EditorialBriefingOutput(
+                events=[],
+                email_spoken_text="邮件简报：课程教室有变化。今日行动：查看 Moodle 通知。",
+                news_spoken_text=_long_script(),
+            )
+        )
 
 
 async def test_generator_uses_one_combined_editorial_call(make_item) -> None:
@@ -169,6 +201,50 @@ async def test_spoken_text_is_sanitized_without_another_call(make_item) -> None:
     assert "*" not in result.briefing.spoken_text
 
 
+async def test_final_spoken_order_is_date_email_news_then_github(make_item) -> None:
+    provider = EmailRecordingProvider()
+    email = _email(body_text="Room change evidence")
+    repository = GitHubTrendingRepo(
+        rank=1,
+        full_name="owner/repo",
+        url="https://github.com/owner/repo",
+        description="A developer tool",
+    )
+
+    result = await BriefingGenerator(provider).generate(
+        [_event(make_item)],
+        target_minutes=5,
+        language="zh-CN",
+        local_date=email.received_at.date(),
+        email_messages=[email],
+        github_repositories=[repository],
+    )
+
+    spoken = result.briefing.spoken_text
+    assert provider.calls == 1
+    assert provider.email_messages == [email]
+    assert spoken.index("今天是2026年10月28日") < spoken.index("邮件简报")
+    assert spoken.index("邮件简报") < spoken.index("这项进展已经由多个来源报道")
+    assert spoken.index("这项进展已经由多个来源报道") < spoken.index("GitHub 今日热榜")
+
+
+async def test_email_llm_failure_never_reads_raw_email_body(make_item) -> None:
+    provider = EmailRecordingProvider(fail=True)
+    raw_body = "PRIVATE RAW EMAIL BODY MUST NOT BE SPOKEN"
+
+    result = await BriefingGenerator(provider).generate(
+        [_event(make_item)],
+        target_minutes=5,
+        language="zh-CN",
+        email_messages=[_email(body_text=raw_body)],
+    )
+
+    assert provider.calls == 1
+    assert result.fallback_used is True
+    assert raw_body not in result.briefing.spoken_text
+    assert "邮件简报" not in result.briefing.spoken_text
+
+
 def _event(make_item) -> NewsEvent:
     item = make_item(
         "Meta faces a lawsuit from US states",
@@ -186,4 +262,16 @@ def _event(make_item) -> NewsEvent:
         source_count=2,
         global_importance_score=0.8,
         editorial_score=0.78,
+    )
+
+
+def _email(*, body_text: str) -> EmailMessage:
+    return EmailMessage(
+        message_id="gmail-1",
+        received_at="2026-10-28T05:04:00Z",
+        sender="UCL <ucl@example.test>",
+        recipients=["student@example.test"],
+        subject="Room change",
+        snippet="The room changed",
+        body_text=body_text,
     )

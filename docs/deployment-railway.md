@@ -43,8 +43,8 @@ RAILWAY_RUN_UID=0 lets docker-entrypoint.sh give /app/data to UID 10001 before d
 non-root morning user. Do not add VOLUME to the Dockerfile.
 
 Repository initialization only executes CREATE TABLE IF NOT EXISTS and CREATE INDEX IF NOT EXISTS.
-The V4 github_trending_snapshots migration is additive; existing briefings and V3 budget rows
-remain readable during and after deployment. No weather table is created.
+The `github_trending_snapshots` and `email_messages` migrations are additive; existing briefings
+and budget rows remain readable during and after deployment. No weather table is created.
 
 ## Variables to check manually before deploy
 
@@ -56,14 +56,16 @@ MORNING_API_TOKEN=<existing secret>
 LLM_API_KEY=<existing secret>
 ~~~
 
-Add two independent secrets:
+Add three independent secrets:
 
 ~~~dotenv
 MORNING_MEDIA_SIGNING_KEY=<new independent random secret>
 AZURE_SPEECH_KEY=<Azure Speech resource key>
+MORNING_EMAIL_INGEST_TOKEN=<private Google Apps Script ingest secret>
 ~~~
 
 Use at least 32 random bytes for `MORNING_MEDIA_SIGNING_KEY` and do not reuse `MORNING_API_TOKEN`.
+Keep `MORNING_EMAIL_INGEST_TOKEN` separate from both the API and podcast tokens.
 The API token remains in the authenticated request header and is never embedded in a media URL.
 Azure Speech credentials are separate from DeepSeek/OpenAI-compatible credentials and must not be
 printed in logs or committed.

@@ -17,6 +17,7 @@ from morning_intelligence.domain import (
     Briefing,
     EditorialBriefingOutput,
     EditorialBriefingResult,
+    EmailMessage,
     EventIntelligence,
     LLMUsage,
     NewsEvent,
@@ -121,6 +122,33 @@ class BlockingProvider(CountingProvider):
         )
 
 
+class EmailAwareProvider(CountingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.email_messages: list[EmailMessage] = []
+
+    async def generate_editorial_briefing(
+        self,
+        events: list[NewsEvent],
+        *,
+        target_minutes: int,
+        language: str,
+        characters_per_minute: int,
+        github_repositories=None,
+        email_messages: list[EmailMessage] | None = None,
+    ) -> EditorialBriefingResult:
+        del github_repositories
+        self.email_messages = email_messages or []
+        result = await super().generate_editorial_briefing(
+            events,
+            target_minutes=target_minutes,
+            language=language,
+            characters_per_minute=characters_per_minute,
+        )
+        result.output.email_spoken_text = "邮件简报：请查看课程通知。"
+        return result
+
+
 class SlowCountingProvider(LLMProvider):
     def __init__(self) -> None:
         self.calls = 0
@@ -209,6 +237,33 @@ async def test_first_daily_post_and_100_duplicates_make_one_provider_call(tmp_pa
     assert all(result.status == "already_claimed" for result in duplicates)
     assert provider.calls == 1
     assert service.latest() is not None
+
+
+async def test_daily_refresh_uses_same_email_window_and_one_editorial_call(tmp_path) -> None:
+    provider = EmailAwareProvider()
+    service = _service(tmp_path / "daily-email.db", provider)
+    now = datetime.now(UTC)
+    start = now - timedelta(hours=24)
+    service.repository.upsert_email_messages(
+        [
+            _email_message("at-start", start),
+            _email_message("inside", now - timedelta(hours=1)),
+            _email_message("after", now + timedelta(microseconds=1)),
+        ]
+    )
+
+    result = await service.daily_refresh(now.date(), now_utc=now)
+
+    assert result.status == "generated"
+    assert provider.calls == 1
+    assert [message.message_id for message in provider.email_messages] == [
+        "at-start",
+        "inside",
+    ]
+    assert result.briefing is not None
+    assert result.briefing.spoken_text.index("邮件简报") < result.briefing.spoken_text.index(
+        "今天值得关注的政策变化"
+    )
 
 
 async def test_concurrent_services_share_one_sqlite_claim(tmp_path) -> None:
@@ -526,3 +581,15 @@ def _latest_pipeline_payload(path) -> dict[str, object]:
             "SELECT payload FROM pipeline_runs ORDER BY started_at DESC LIMIT 1"
         ).fetchone()[0]
     return json.loads(payload)  # type: ignore[no-any-return]
+
+
+def _email_message(message_id: str, received_at: datetime) -> EmailMessage:
+    return EmailMessage(
+        message_id=message_id,
+        received_at=received_at,
+        sender="UCL <ucl@example.test>",
+        recipients=["student@example.test"],
+        subject="Course update",
+        snippet="Please check Moodle",
+        body_text="A course update was posted.",
+    )

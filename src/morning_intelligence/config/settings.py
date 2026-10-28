@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     )
 
     morning_api_token: str = ""
+    morning_email_ingest_token: str = ""
     morning_database_path: Path = Path("data/morning_intelligence.db")
     morning_sources_config: Path = Path("config/sources.yaml")
     morning_preferences_config: Path = Path("config/preferences.yaml")

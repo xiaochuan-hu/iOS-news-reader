@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from morning_intelligence.domain import (
     Briefing,
+    EmailMessage,
     GitHubTrendingRepo,
     LLMBudgetClaim,
     LLMBudgetClaimResult,
@@ -90,8 +91,105 @@ class SQLiteRepository:
                     PRIMARY KEY(snapshot_date, rank)
                 );
 
+                CREATE TABLE IF NOT EXISTS email_messages (
+                    message_id TEXT PRIMARY KEY,
+                    thread_id TEXT,
+                    received_at_utc TEXT NOT NULL,
+                    sender TEXT NOT NULL,
+                    recipients_json TEXT NOT NULL,
+                    cc_json TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    snippet TEXT NOT NULL,
+                    body_text TEXT NOT NULL,
+                    ingested_at_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_email_messages_received
+                    ON email_messages(received_at_utc);
+
                 """
             )
+
+    def upsert_email_messages(self, messages: list[EmailMessage]) -> int:
+        accepted = [
+            message
+            for message in messages
+            if not message.subject.startswith("UCL Morning Brief |")
+        ]
+        if not accepted:
+            return 0
+        ingested_at = _now_iso()
+        rows = [
+            (
+                message.message_id,
+                message.thread_id,
+                message.received_at.astimezone(UTC).isoformat(),
+                message.sender,
+                json.dumps(message.recipients, ensure_ascii=False),
+                json.dumps(message.cc, ensure_ascii=False),
+                message.subject,
+                message.snippet,
+                message.body_text,
+                ingested_at,
+            )
+            for message in accepted
+        ]
+        with self._connect() as connection:
+            connection.executemany(
+                """INSERT INTO email_messages(
+                    message_id, thread_id, received_at_utc, sender, recipients_json,
+                    cc_json, subject, snippet, body_text, ingested_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(message_id) DO UPDATE SET
+                    thread_id=excluded.thread_id,
+                    received_at_utc=excluded.received_at_utc,
+                    sender=excluded.sender,
+                    recipients_json=excluded.recipients_json,
+                    cc_json=excluded.cc_json,
+                    subject=excluded.subject,
+                    snippet=excluded.snippet,
+                    body_text=excluded.body_text,
+                    ingested_at_utc=excluded.ingested_at_utc""",
+                rows,
+            )
+        return len(accepted)
+
+    def get_email_messages(
+        self, start_utc: datetime, end_utc: datetime, limit: int = 80
+    ) -> list[EmailMessage]:
+        if start_utc.tzinfo is None or end_utc.tzinfo is None:
+            raise ValueError("email window must be timezone-aware")
+        if limit < 1:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM (
+                    SELECT * FROM email_messages
+                    WHERE received_at_utc >= ? AND received_at_utc <= ?
+                      AND subject NOT LIKE ?
+                    ORDER BY received_at_utc DESC
+                    LIMIT ?
+                ) ORDER BY received_at_utc ASC""",
+                (
+                    start_utc.astimezone(UTC).isoformat(),
+                    end_utc.astimezone(UTC).isoformat(),
+                    "UCL Morning Brief |%",
+                    limit,
+                ),
+            ).fetchall()
+        return [
+            EmailMessage(
+                message_id=row["message_id"],
+                thread_id=row["thread_id"],
+                received_at=_parse(row["received_at_utc"]),
+                sender=row["sender"],
+                recipients=json.loads(row["recipients_json"]),
+                cc=json.loads(row["cc_json"]),
+                subject=row["subject"],
+                snippet=row["snippet"],
+                body_text=row["body_text"],
+            )
+            for row in rows
+        ]
 
     def save_github_trending_snapshot(
         self,

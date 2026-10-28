@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from morning_intelligence.api import (
     briefings_router,
+    email_ingest_router,
     health_router,
     media_router,
     podcast_router,
@@ -137,6 +138,7 @@ def create_app(
     )
     application.include_router(health_router)
     application.include_router(briefings_router)
+    application.include_router(email_ingest_router)
     application.include_router(media_router)
     application.include_router(podcast_router)
     return application

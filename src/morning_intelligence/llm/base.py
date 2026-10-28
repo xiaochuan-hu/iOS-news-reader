@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from morning_intelligence.domain import EditorialBriefingResult, GitHubTrendingRepo, NewsEvent
+from morning_intelligence.domain import (
+    EditorialBriefingResult,
+    EmailMessage,
+    GitHubTrendingRepo,
+    NewsEvent,
+)
 
 
 class LLMProvider(ABC):
@@ -15,4 +20,5 @@ class LLMProvider(ABC):
         language: str,
         characters_per_minute: int,
         github_repositories: list[GitHubTrendingRepo] | None = None,
+        email_messages: list[EmailMessage] | None = None,
     ) -> EditorialBriefingResult: ...

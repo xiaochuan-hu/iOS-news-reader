@@ -6,11 +6,21 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from morning_intelligence.domain import Briefing, BriefingSection
+from morning_intelligence.domain import Briefing, BriefingSection, EmailMessage
 
 
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
+
+
+class EmailIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[EmailMessage] = Field(max_length=100)
+
+
+class EmailIngestResponse(BaseModel):
+    accepted: int = Field(ge=0, le=100)
 
 
 class GenerateBriefingRequest(BaseModel):

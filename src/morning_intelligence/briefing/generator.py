@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from morning_intelligence.domain import (
     Briefing,
     BriefingSection,
+    EmailMessage,
     EnrichedNewsEvent,
     EventIntelligence,
     GitHubTrendingRepo,
@@ -51,6 +52,7 @@ class BriefingGenerator:
         characters_per_minute: int = 260,
         local_date: date | None = None,
         github_repositories: list[GitHubTrendingRepo] | None = None,
+        email_messages: list[EmailMessage] | None = None,
         github_source: GitHubTrendingSource | None = None,
         news_window_start: datetime | None = None,
         news_window_end: datetime | None = None,
@@ -63,13 +65,24 @@ class BriefingGenerator:
         llm_succeeded = False
         fallback_reason = ""
         news_spoken_text = ""
+        email_spoken_text = ""
         github_intelligence = []
         repositories = github_repositories or []
-        if self.provider and events:
+        messages = email_messages or []
+        if self.provider and (events or messages):
             editorial_calls = 1
             started = time.perf_counter()
             try:
-                if repositories:
+                if messages:
+                    generated = await self.provider.generate_editorial_briefing(
+                        events,
+                        target_minutes=target_minutes,
+                        language=language,
+                        characters_per_minute=characters_per_minute,
+                        github_repositories=repositories,
+                        email_messages=messages,
+                    )
+                elif repositories:
                     generated = await self.provider.generate_editorial_briefing(
                         events,
                         target_minutes=target_minutes,
@@ -93,12 +106,20 @@ class BriefingGenerator:
                 news_spoken_text = remove_redundant_llm_intro(
                     sanitize_spoken_text(generated.output.news_spoken_text)
                 )
+                if messages:
+                    email_spoken_text = remove_redundant_llm_intro(
+                        sanitize_spoken_text(
+                            generated.output.email_spoken_text,
+                            max_chars=1200,
+                        )
+                    )
                 github_intelligence = generated.output.github_repositories
-                if not _is_valid_chinese_script(news_spoken_text, language):
+                if events and not _is_valid_chinese_script(news_spoken_text, language):
                     raise ValueError("LLM spoken script failed language validation")
                 llm_succeeded = True
             except Exception as exc:
                 news_spoken_text = ""
+                email_spoken_text = ""
                 fallback_reason = f"combined_editorial:{type(exc).__name__}"
             finally:
                 editorial_latency_ms = (time.perf_counter() - started) * 1000
@@ -116,6 +137,7 @@ class BriefingGenerator:
         spoken_text = "".join(
             (
                 format_date_intro(effective_date),
+                email_spoken_text,
                 news_spoken_text,
                 format_github_section(
                     repositories, github_intelligence, source=github_source

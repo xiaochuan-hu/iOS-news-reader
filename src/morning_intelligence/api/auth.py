@@ -19,3 +19,19 @@ async def require_auth(request: Request) -> None:
             detail="invalid or missing API token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+async def require_email_ingest_auth(request: Request) -> None:
+    expected = request.app.state.settings.morning_email_ingest_token
+    authorization = request.headers.get("Authorization", "")
+    supplied = (
+        authorization[7:].strip()
+        if authorization.lower().startswith("bearer ")
+        else ""
+    )
+    if not expected or not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

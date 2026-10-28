@@ -169,6 +169,7 @@ class MorningBriefingService:
             "persistence_ms": 0.0,
         }
         selected = []
+        email_messages = []
         github_selection = GitHubTrendingSelection(
             [], GitHubTrendingSource.UNAVAILABLE, None
         )
@@ -180,6 +181,11 @@ class MorningBriefingService:
             window_start_utc = window_end_utc - timedelta(hours=24)
             metrics.news_window_start_utc = window_start_utc
             metrics.news_window_end_utc = window_end_utc
+            email_messages = self.repository.get_email_messages(
+                window_start_utc,
+                window_end_utc,
+                limit=80,
+            )
 
             collection_task = asyncio.create_task(
                 _measure_async_stage(
@@ -291,7 +297,7 @@ class MorningBriefingService:
                 time.perf_counter() - persistence_started
             ) * 1000
 
-            if self.llm_provider is not None and selected:
+            if self.llm_provider is not None and (selected or email_messages):
                 claim_result = self.repository.claim_llm_budget(
                     purpose=EDITORIAL_BUDGET_PURPOSE,
                     local_date=local_date,
@@ -332,6 +338,7 @@ class MorningBriefingService:
                     characters_per_minute=self.preferences.briefing.characters_per_minute,
                     local_date=local_date,
                     github_repositories=github_selection.repositories,
+                    email_messages=email_messages,
                     github_source=github_selection.source,
                     news_window_start=window_start_utc,
                     news_window_end=window_end_utc,
@@ -381,7 +388,7 @@ class MorningBriefingService:
             metrics.estimated_duration_seconds = briefing.estimated_duration_seconds
             if self.llm_provider is None:
                 status: DailyRefreshStatus = "no_llm_available"
-            elif not selected or generation.fallback_used:
+            elif (not selected and not email_messages) or generation.fallback_used:
                 status = "generated_fallback"
             else:
                 status = "generated"
@@ -432,6 +439,7 @@ class MorningBriefingService:
                         characters_per_minute=self.preferences.briefing.characters_per_minute,
                         local_date=local_date,
                         github_repositories=github_selection.repositories,
+                        email_messages=email_messages,
                         github_source=github_selection.source,
                         news_window_start=metrics.news_window_start_utc,
                         news_window_end=metrics.news_window_end_utc,
